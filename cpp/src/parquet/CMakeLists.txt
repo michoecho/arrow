@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+find_package(Seastar REQUIRED)
+
 add_custom_target(parquet-all)
 add_custom_target(parquet)
 add_custom_target(parquet-benchmarks)
@@ -39,6 +41,36 @@ string(REGEX
        REPLACE "^[0-9]+\.[0-9]+\.([0-9]+)(-.+)?$" "\\1" PARQUET_VERSION_PATCH
                "${PARQUET_VERSION}")
 
+function(ADD_SEASTAR_TEST REL_TEST_NAME)
+  set(one_value_args)
+  set(multi_value_args EXTRA_DEPENDENCIES LABELS)
+  cmake_parse_arguments(ARG
+                        "${options}"
+                        "${one_value_args}"
+                        "${multi_value_args}"
+                        ${ARGN})
+
+  set(TEST_ARGUMENTS PREFIX "parquet" LABELS "parquet-tests")
+
+  if(ARROW_TEST_LINKAGE STREQUAL "static")
+    add_test_case(${REL_TEST_NAME}
+                  STATIC_LINK_LIBS
+		  Seastar::seastar
+		  Seastar::seastar_testing
+                  ${PARQUET_STATIC_TEST_LINK_LIBS}
+                  ${TEST_ARGUMENTS}
+                  ${ARG_UNPARSED_ARGUMENTS})
+  else()
+    add_test_case(${REL_TEST_NAME}
+                  STATIC_LINK_LIBS
+		  Seastar::seastar
+		  Seastar::seastar_testing
+                  ${PARQUET_SHARED_TEST_LINK_LIBS}
+                  ${TEST_ARGUMENTS}
+                  ${ARG_UNPARSED_ARGUMENTS})
+  endif()
+endfunction()
+
 function(ADD_PARQUET_TEST REL_TEST_NAME)
   set(one_value_args)
   set(multi_value_args EXTRA_DEPENDENCIES LABELS)
@@ -53,12 +85,14 @@ function(ADD_PARQUET_TEST REL_TEST_NAME)
   if(ARROW_TEST_LINKAGE STREQUAL "static")
     add_test_case(${REL_TEST_NAME}
                   STATIC_LINK_LIBS
+                  GTest::Main
                   ${PARQUET_STATIC_TEST_LINK_LIBS}
                   ${TEST_ARGUMENTS}
                   ${ARG_UNPARSED_ARGUMENTS})
   else()
     add_test_case(${REL_TEST_NAME}
                   STATIC_LINK_LIBS
+                  GTest::Main
                   ${PARQUET_SHARED_TEST_LINK_LIBS}
                   ${TEST_ARGUMENTS}
                   ${ARG_UNPARSED_ARGUMENTS})
@@ -107,7 +141,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
   list(APPEND PARQUET_BOOST_LINK_LIBS ${BOOST_REGEX_LIBRARY})
 endif()
 
-set(PARQUET_MIN_TEST_LIBS GTest::Main GTest::GTest)
+set(PARQUET_MIN_TEST_LIBS GTest::GTest)
 
 if(APPLE)
   set(PARQUET_MIN_TEST_LIBS ${PARQUET_MIN_TEST_LIBS} ${CMAKE_DL_LIBS})
@@ -329,6 +363,11 @@ add_parquet_test(arrow-test
                  SOURCES
                  arrow/arrow_reader_writer_test.cc
                  arrow/arrow_schema_test.cc
+                 test_util.cc)
+
+add_seastar_test(seastar-test
+                 SOURCES
+                 arrow/arrow_reader_writer_test_seastar.cc
                  test_util.cc)
 
 if(PARQUET_REQUIRE_ENCRYPTION)
