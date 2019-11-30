@@ -1,5 +1,6 @@
 #pragma once
 #include <seastar/core/fstream.hh>
+#include "arrow/util/memory.h"
 
 namespace parquet::seastarized {
 
@@ -38,7 +39,40 @@ class FileFutureOutputStream : public FutureOutputStream {
     return sink_.close();
   }
 
-  virtual int64_t Tell() {
+  int64_t Tell() override {
+    return pos;
+  }
+};
+
+class MemoryFutureOutputStream : public FutureOutputStream {
+  std::shared_ptr<::arrow::io::BufferOutputStream> sink_;
+
+ public:
+  MemoryFutureOutputStream(const std::shared_ptr<::arrow::io::BufferOutputStream>& sink)
+    : sink_(std::move(sink)) {}
+
+  seastar::future<> Write(const std::shared_ptr<Buffer>& data) override {
+    PARQUET_THROW_NOT_OK(sink_->Write(data));
+    return seastar::make_ready_future<>();
+  }
+
+  seastar::future<> Write(const void *data, int64_t nbytes) override {
+    PARQUET_THROW_NOT_OK(sink_->Write(data, nbytes));
+    return seastar::make_ready_future<>();
+  };
+
+  seastar::future<> Flush() override {
+    PARQUET_THROW_NOT_OK(sink_->Flush());
+    return seastar::make_ready_future<>();
+  };
+  seastar::future<> Close() override {
+    PARQUET_THROW_NOT_OK(sink_->Close());
+    return seastar::make_ready_future<>();
+  }
+
+  int64_t Tell() override {
+    int64_t pos;
+    PARQUET_THROW_NOT_OK(sink_->Tell(&pos));
     return pos;
   }
 };

@@ -1831,8 +1831,8 @@ class SerializedPageWriter : public PageWriter {
         });
       });
   }
-#if 0
-  void Close(bool has_dictionary, bool fallback) override {
+
+  seastar::future<> Close(bool has_dictionary, bool fallback) override {
     if (meta_encryptor_ != nullptr) {
       UpdateEncryption(encryption::kColumnMetaData);
     }
@@ -1841,7 +1841,7 @@ class SerializedPageWriter : public PageWriter {
                       total_compressed_size_, total_uncompressed_size_, has_dictionary,
                       fallback, meta_encryptor_);
     // Write metadata at end of column chunk
-    metadata_->WriteTo(sink_.get());
+    return metadata_->WriteTo(sink_.get()).then([](int64_t){});
   }
 
   /**
@@ -1865,7 +1865,7 @@ class SerializedPageWriter : public PageWriter {
     PARQUET_THROW_NOT_OK(dest_buffer->Resize(compressed_size, false));
   }
 
-  int64_t WriteDataPage(const CompressedDataPage& page) override {
+  seastar::future<int64_t> WriteDataPage(const CompressedDataPage& page) override {
     int64_t uncompressed_size = page.uncompressed_size();
     std::shared_ptr<Buffer> compressed_data = page.buffer();
     format::DataPageHeader data_page_header;
@@ -1897,8 +1897,7 @@ class SerializedPageWriter : public PageWriter {
     page_header.__set_data_page_header(data_page_header);
     // TODO(PARQUET-594) crc checksum
 
-    int64_t start_pos = -1;
-    PARQUET_THROW_NOT_OK(sink_->Tell(&start_pos));
+    int64_t start_pos = sink_->Tell();
     if (data_page_offset_ == 0) {
       data_page_offset_ = start_pos;
     }
@@ -1906,18 +1905,19 @@ class SerializedPageWriter : public PageWriter {
     if (meta_encryptor_) {
       UpdateEncryption(encryption::kDataPageHeader);
     }
-    int64_t header_size =
-        thrift_serializer_->Serialize(&page_header, sink_.get(), meta_encryptor_);
-    PARQUET_THROW_NOT_OK(sink_->Write(output_data_buffer, output_data_len));
 
-    total_uncompressed_size_ += uncompressed_size + header_size;
-    total_compressed_size_ += output_data_len + header_size;
-    num_values_ += page.num_values();
+    return thrift_serializer_->Serialize(&page_header, sink_.get(), meta_encryptor_).then(
+    [=] (int64_t header_size) {
+      return sink_->Write(output_data_buffer, output_data_len).then([=] {
+        total_uncompressed_size_ += uncompressed_size + header_size;
+        total_compressed_size_ += output_data_len + header_size;
+        num_values_ += page.num_values();
 
-    ++page_ordinal_;
-    int64_t current_pos = -1;
-    PARQUET_THROW_NOT_OK(sink_->Tell(&current_pos));
-    return current_pos - start_pos;
+        ++page_ordinal_;
+        int64_t current_pos = sink_->Tell();
+        return current_pos - start_pos;
+      });
+    });
   }
 
   bool has_compressor() override { return (compressor_ != nullptr); }
@@ -1933,7 +1933,6 @@ class SerializedPageWriter : public PageWriter {
   int64_t total_uncompressed_size() { return total_uncompressed_size_; }
 
  private:
-#endif
   void InitEncryption() {
     // Prepare the AAD for quick update later.
     if (data_encryptor_ != nullptr) {
