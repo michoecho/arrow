@@ -7,11 +7,11 @@ namespace parquet::seastarized {
 class FutureOutputStream {
  public:
   virtual ~FutureOutputStream() = default;
-  virtual seastar::future<> Write(const std::shared_ptr<Buffer>& data);
-  virtual seastar::future<> Write(const void *data, int64_t nbytes);
-  virtual seastar::future<> Flush();
-  virtual seastar::future<> Close();
-  virtual int64_t Tell();
+  virtual seastar::future<> Write(const std::shared_ptr<Buffer>& data) = 0;
+  virtual seastar::future<> Write(const void *data, int64_t nbytes) = 0;
+  virtual seastar::future<> Flush() = 0;
+  virtual seastar::future<> Close() = 0;
+  virtual int64_t Tell() = 0;
 };
 
 class FileFutureOutputStream : public FutureOutputStream {
@@ -19,7 +19,7 @@ class FileFutureOutputStream : public FutureOutputStream {
   int64_t pos = 0;
 
  public:
-  FileFutureOutputStream(seastar::output_stream<char> sink)
+  FileFutureOutputStream(seastar::output_stream<char> &&sink)
     : sink_(std::move(sink)) {}
 
   seastar::future<> Write(const std::shared_ptr<Buffer>& data) override {
@@ -48,8 +48,8 @@ class MemoryFutureOutputStream : public FutureOutputStream {
   std::shared_ptr<::arrow::io::BufferOutputStream> sink_;
 
  public:
-  MemoryFutureOutputStream(const std::shared_ptr<::arrow::io::BufferOutputStream>& sink)
-    : sink_(sink) {}
+  MemoryFutureOutputStream(std::shared_ptr<::arrow::io::BufferOutputStream> sink)
+    : sink_(std::move(sink)) {}
 
   seastar::future<> Write(const std::shared_ptr<Buffer>& data) override {
     PARQUET_THROW_NOT_OK(sink_->Write(data));

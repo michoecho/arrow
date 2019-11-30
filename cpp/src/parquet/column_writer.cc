@@ -1776,6 +1776,33 @@ class SerializedPageWriter : public PageWriter {
     thrift_serializer_.reset(new ThriftSerializer);
   }
 
+  SerializedPageWriter(const std::shared_ptr<::arrow::io::BufferOutputStream>& sink,
+                       Compression::type codec, int compression_level,
+                       ColumnChunkMetaDataBuilder* metadata, int16_t row_group_ordinal,
+                       int16_t column_chunk_ordinal,
+                       MemoryPool* pool = arrow::default_memory_pool(),
+                       std::shared_ptr<Encryptor> meta_encryptor = nullptr,
+                       std::shared_ptr<Encryptor> data_encryptor = nullptr)
+      : sink_(std::make_shared<MemoryFutureOutputStream>(sink)),
+        metadata_(metadata),
+        pool_(pool),
+        num_values_(0),
+        dictionary_page_offset_(0),
+        data_page_offset_(0),
+        total_uncompressed_size_(0),
+        total_compressed_size_(0),
+        page_ordinal_(0),
+        row_group_ordinal_(row_group_ordinal),
+        column_ordinal_(column_chunk_ordinal),
+        meta_encryptor_(meta_encryptor),
+        data_encryptor_(data_encryptor) {
+    if (data_encryptor_ != nullptr || meta_encryptor_ != nullptr) {
+      InitEncryption();
+    }
+    compressor_ = GetCodec(codec, compression_level);
+    thrift_serializer_.reset(new ThriftSerializer);
+  }
+
   seastar::future<int64_t> WriteDictionaryPage(const DictionaryPage& page) override {
     int64_t uncompressed_size = page.size();
     std::shared_ptr<Buffer> compressed_data;
@@ -2007,11 +2034,10 @@ class SerializedPageWriter : public PageWriter {
   std::shared_ptr<Encryptor> data_encryptor_;
 };
 
-#if 0
 // This implementation of the PageWriter writes to the final sink on Close .
 class BufferedPageWriter : public PageWriter {
  public:
-  BufferedPageWriter(const std::shared_ptr<ArrowOutputStream>& sink,
+  BufferedPageWriter(const std::shared_ptr<FutureOutputStream>& sink,
                      Compression::type codec, int compression_level,
                      ColumnChunkMetaDataBuilder* metadata, int16_t row_group_ordinal,
                      int16_t current_column_ordinal,
@@ -2025,14 +2051,13 @@ class BufferedPageWriter : public PageWriter {
         current_column_ordinal, pool, meta_encryptor, data_encryptor));
   }
 
-  int64_t WriteDictionaryPage(const DictionaryPage& page) override {
+  seastar::future<int64_t> WriteDictionaryPage(const DictionaryPage& page) override {
     return pager_->WriteDictionaryPage(page);
   }
 
-  void Close(bool has_dictionary, bool fallback) override {
+  seastar::future<> Close(bool has_dictionary, bool fallback) override {
     // index_page_offset = -1 since they are not supported
-    int64_t final_position = -1;
-    PARQUET_THROW_NOT_OK(final_sink_->Tell(&final_position));
+    int64_t final_position = final_sink_->Tell();
     metadata_->Finish(
         pager_->num_values(), pager_->dictionary_page_offset() + final_position, -1,
         pager_->data_page_offset() + final_position, pager_->total_compressed_size(),
@@ -2044,10 +2069,10 @@ class BufferedPageWriter : public PageWriter {
     // flush everything to the serialized sink
     std::shared_ptr<Buffer> buffer;
     PARQUET_THROW_NOT_OK(in_memory_sink_->Finish(&buffer));
-    PARQUET_THROW_NOT_OK(final_sink_->Write(buffer));
+    return final_sink_->Write(buffer);
   }
 
-  int64_t WriteDataPage(const CompressedDataPage& page) override {
+  seastar::future<int64_t> WriteDataPage(const CompressedDataPage& page) override {
     return pager_->WriteDataPage(page);
   }
 
@@ -2058,14 +2083,14 @@ class BufferedPageWriter : public PageWriter {
   bool has_compressor() override { return pager_->has_compressor(); }
 
  private:
-  std::shared_ptr<ArrowOutputStream> final_sink_;
+  std::shared_ptr<FutureOutputStream> final_sink_;
   ColumnChunkMetaDataBuilder* metadata_;
   std::shared_ptr<arrow::io::BufferOutputStream> in_memory_sink_;
   std::unique_ptr<SerializedPageWriter> pager_;
 };
 
 std::unique_ptr<PageWriter> PageWriter::Open(
-    const std::shared_ptr<ArrowOutputStream>& sink, Compression::type codec,
+    const std::shared_ptr<FutureOutputStream>& sink, Compression::type codec,
     int compression_level, ColumnChunkMetaDataBuilder* metadata,
     int16_t row_group_ordinal, int16_t column_chunk_ordinal, MemoryPool* pool,
     bool buffered_row_group, std::shared_ptr<Encryptor> meta_encryptor,
@@ -2081,7 +2106,6 @@ std::unique_ptr<PageWriter> PageWriter::Open(
   }
 }
 
-#endif
 
 // ----------------------------------------------------------------------
 // ColumnWriter
@@ -2486,7 +2510,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
     return DoInBatches(num_values, properties_->write_batch_size(), WriteChunk);
   }
 
-  void WriteBatchSpaced(int64_t num_values, const int16_t* def_levels,
+  seastar::future<> WriteBatchSpaced(int64_t num_values, const int16_t* def_levels,
                         const int16_t* rep_levels, const uint8_t* valid_bits,
                         int64_t valid_bits_offset, const T* values) override {
     // Like WriteBatch, but for spaced values
@@ -3342,6 +3366,7 @@ Status TypedColumnWriterImpl<FLBAType>::WriteArrowDense(const int16_t* def_level
   return Status::OK();
 }
 
+#endif
 // ----------------------------------------------------------------------
 // Dynamic column writer constructor
 
@@ -3386,7 +3411,6 @@ std::shared_ptr<ColumnWriter> ColumnWriter::Make(ColumnChunkMetaDataBuilder* met
   // Unreachable code, but supress compiler warning
   return std::shared_ptr<ColumnWriter>(nullptr);
 }
-#endif
 } // namespace seastarized
 
 }  // namespace parquet

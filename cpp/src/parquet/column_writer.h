@@ -268,10 +268,12 @@ class PARQUET_EXPORT ColumnWriter {
   /// \brief Write Apache Arrow columnar data directly to ColumnWriter. Returns
   /// error status if the array data type is not compatible with the concrete
   /// writer type
+#if 0
   virtual seastar::future<::arrow::Status>
   WriteArrow(const int16_t* def_levels, const int16_t* rep_levels,
              int64_t num_levels, const ::arrow::Array& array,
              ArrowWriteContext* ctx) = 0;
+#endif
 };
 
 // API to write values to a single column. This is the main client facing API.

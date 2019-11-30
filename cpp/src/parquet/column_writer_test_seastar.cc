@@ -32,6 +32,7 @@
 #include "parquet/test_util.h"
 #include "parquet/thrift_internal.h"
 #include "parquet/types.h"
+#include "parquet/io.h"
 
 namespace parquet {
 
@@ -92,7 +93,7 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
       int64_t output_size = SMALL_SIZE,
       const ColumnProperties& column_properties = ColumnProperties(),
       const ParquetVersion::type version = ParquetVersion::PARQUET_1_0) {
-    sink_ = CreateOutputStream();
+    sink_ = std::make_shared<seastarized::MemoryFutureOutputStream>(CreateOutputStream());
     WriterProperties::Builder wp_builder;
     wp_builder.version(version);
     if (column_properties.encoding() == Encoding::PLAIN_DICTIONARY ||
@@ -107,14 +108,15 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
     writer_properties_ = wp_builder.build();
 
     metadata_ = ColumnChunkMetaDataBuilder::Make(writer_properties_, this->descr_);
-    std::unique_ptr<PageWriter> pager =
-        PageWriter::Open(sink_, column_properties.compression(),
+    std::unique_ptr<seastarized::PageWriter> pager =
+        seastarized::PageWriter::Open(sink_, column_properties.compression(),
                          Codec::UseDefaultCompressionLevel(), metadata_.get());
-    std::shared_ptr<ColumnWriter> writer =
-        ColumnWriter::Make(metadata_.get(), std::move(pager), writer_properties_.get());
-    return std::static_pointer_cast<TypedColumnWriter<TestType>>(writer);
+    std::shared_ptr<seastarized::ColumnWriter> writer =
+        seastarized::ColumnWriter::Make(metadata_.get(), std::move(pager), writer_properties_.get());
+    return std::static_pointer_cast<seastarized::TypedColumnWriter<TestType>>(writer);
   }
 
+#if 0
   void ReadColumn(Compression::type compression = Compression::UNCOMPRESSED) {
     BuildReader(static_cast<int64_t>(this->values_out_.size()), compression);
     reader_->ReadBatch(static_cast<int>(this->values_out_.size()),
@@ -274,6 +276,7 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
     return metadata_accessor->encodings();
   }
 
+#endif
  protected:
   int64_t values_read_;
   // Keep the reader alive as for ByteArray the lifetime of the ByteArray
@@ -287,11 +290,12 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
 
  private:
   std::unique_ptr<ColumnChunkMetaDataBuilder> metadata_;
-  std::shared_ptr<::arrow::io::BufferOutputStream> sink_;
+  std::shared_ptr<seastarized::MemoryFutureOutputStream> sink_;
   std::shared_ptr<WriterProperties> writer_properties_;
   std::vector<std::vector<uint8_t>> data_buffer_;
 };
 
+#if 0
 template <typename TestType>
 void TestPrimitiveWriter<TestType>::ReadColumnFully(Compression::type compression) {
   int64_t total_values = static_cast<int64_t>(this->values_out_.size());
@@ -948,6 +952,7 @@ TEST(TestLevelEncoder, MinimumBufferSize2) {
     ASSERT_EQ(kNumToEncode, encode_count);
   }
 }
+#endif
 
 }  // namespace test
 }  // namespace parquet
