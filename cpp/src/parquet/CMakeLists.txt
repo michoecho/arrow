@@ -55,16 +55,16 @@ function(ADD_SEASTAR_TEST REL_TEST_NAME)
   if(ARROW_TEST_LINKAGE STREQUAL "static")
     add_test_case(${REL_TEST_NAME}
                   STATIC_LINK_LIBS
-		  Seastar::seastar
-		  Seastar::seastar_testing
+                  Seastar::seastar
+                  Seastar::seastar_testing
                   ${PARQUET_STATIC_TEST_LINK_LIBS}
                   ${TEST_ARGUMENTS}
                   ${ARG_UNPARSED_ARGUMENTS})
   else()
     add_test_case(${REL_TEST_NAME}
                   STATIC_LINK_LIBS
-		  Seastar::seastar
-		  Seastar::seastar_testing
+                  Seastar::seastar
+                  Seastar::seastar_testing
                   ${PARQUET_SHARED_TEST_LINK_LIBS}
                   ${TEST_ARGUMENTS}
                   ${ARG_UNPARSED_ARGUMENTS})
@@ -239,7 +239,7 @@ if(NOT PARQUET_MINIMAL_DEPENDENCY)
   # Link publicly with parquet_static (because internal users need to
   # transitively link all dependencies)
   set(PARQUET_STATIC_LINK_LIBS ${PARQUET_STATIC_LINK_LIBS} ${PARQUET_BOOST_LINK_LIBS}
-                               Thrift::thrift)
+                               Thrift::thrift Seastar::seastar)
 
   # Although we don't link parquet_objlib against anything, we need it to depend
   # on these libs as we may generate their headers via ExternalProject_Add
@@ -332,7 +332,7 @@ configure_file(parquet_version.h.in "${CMAKE_CURRENT_BINARY_DIR}/parquet_version
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/parquet_version.h"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/parquet")
 
-add_parquet_test(internals-test
+add_seastar_test(internals-test
                  SOURCES
                  bloom_filter_test.cc
                  deprecated_io_test.cc
@@ -342,47 +342,53 @@ add_parquet_test(internals-test
                  metadata_test.cc
                  public_api_test.cc
                  types_test.cc
+                 test_main.cc
                  test_util.cc)
 
-add_parquet_test(reader_test
+add_seastar_test(reader_test
                  SOURCES
                  column_reader_test.cc
                  column_scanner_test.cc
                  reader_test.cc
                  stream_reader_test.cc
+                 test_main.cc
                  test_util.cc)
 
-add_parquet_test(writer-test
+add_seastar_test(writer-test
                  SOURCES
                  column_writer_test.cc
                  file_serialize_test.cc
                  stream_writer_test.cc
+                 test_main.cc
                  test_util.cc)
 
-add_parquet_test(arrow-test
+add_seastar_test(arrow-test
                  SOURCES
                  arrow/arrow_reader_writer_test.cc
                  arrow/arrow_schema_test.cc
+                 test_main.cc
                  test_util.cc)
 
 add_seastar_test(seastar-test
                  SOURCES
-                 arrow/arrow_reader_writer_test_seastar.cc
+                 column_writer_test_seastar.cc
+                 test_main.cc
                  test_util.cc)
 
 if(PARQUET_REQUIRE_ENCRYPTION)
-  add_parquet_test(encryption-test
+  add_seastar_test(encryption-test
                    SOURCES
                    encryption_write_configurations_test.cc
                    encryption_read_configurations_test.cc
                    encryption_properties_test.cc
+                   test_main.cc
                    test_util.cc)
 endif()
 
 # Those tests need to use static linking as they access thrift-generated
 # symbols which are not exported by parquet.dll on Windows (PARQUET-1420).
-add_parquet_test(file_deserialize_test SOURCES file_deserialize_test.cc test_util.cc)
-add_parquet_test(schema_test)
+add_seastar_test(file_deserialize_test SOURCES file_deserialize_test.cc test_util.cc test_main.cc)
+add_seastar_test(schema_test SOURCES test_main.cc)
 
 add_parquet_benchmark(column_io_benchmark)
 add_parquet_benchmark(encoding_benchmark)

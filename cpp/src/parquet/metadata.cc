@@ -32,6 +32,7 @@
 #include "parquet/schema_internal.h"
 #include "parquet/statistics.h"
 #include "parquet/thrift_internal.h"
+#include "parquet/io.h"
 
 // ARROW-6096: The boost regex library must be used when compiling with gcc < 4.9
 #if defined(PARQUET_USE_BOOST_REGEX)
@@ -1018,6 +1019,11 @@ class ColumnChunkMetaDataBuilder::ColumnChunkMetaDataBuilderImpl {
     serializer.Serialize(column_chunk_, sink);
   }
 
+  seastar::future<int64_t> WriteTo(seastarized::FutureOutputStream* sink) {
+    ThriftSerializer serializer;
+    return serializer.Serialize(column_chunk_, sink);
+  }
+
   const ColumnDescriptor* descr() const { return column_; }
   int64_t total_compressed_size() const {
     return column_chunk_->meta_data.total_compressed_size;
@@ -1086,6 +1092,11 @@ void ColumnChunkMetaDataBuilder::Finish(int64_t num_values,
 
 void ColumnChunkMetaDataBuilder::WriteTo(::arrow::io::OutputStream* sink) {
   impl_->WriteTo(sink);
+}
+
+seastar::future<int64_t>
+ColumnChunkMetaDataBuilder::WriteTo(seastarized::FutureOutputStream* sink) {
+  return impl_->WriteTo(sink);
 }
 
 const ColumnDescriptor* ColumnChunkMetaDataBuilder::descr() const {

@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <seastar/core/reactor.hh>
+
 #include "arrow/util/windows_compatibility.h"
 
 #include <cstdint>
@@ -49,6 +51,7 @@
 #include "parquet/platform.h"
 #include "parquet/statistics.h"
 #include "parquet/types.h"
+#include "parquet/io.h"
 
 #include "parquet/parquet_types.h"  // IYWU pragma: export
 
@@ -326,6 +329,23 @@ class ThriftSerializer {
     }
   }
 
+  template <class T>
+  seastar::future<int64_t> Serialize(const T* obj, seastarized::FutureOutputStream* out,
+                    const std::shared_ptr<Encryptor>& encryptor = NULLPTR) {
+    uint8_t* out_buffer;
+    uint32_t out_length;
+    SerializeToBuffer(obj, &out_length, &out_buffer);
+
+    // obj is not encrypted
+    if (encryptor == NULLPTR) {
+      return out->Write(out_buffer, out_length).then([=] {
+        return static_cast<int64_t>(out_length);
+      });
+    } else {  // obj is encrypted
+      return SerializeEncryptedObj(out, out_buffer, out_length, encryptor);
+    }
+  }
+
  private:
   template <class T>
   void SerializeObject(const T* obj) {
@@ -351,6 +371,21 @@ class ThriftSerializer {
 
     PARQUET_THROW_NOT_OK(out->Write(cipher_buffer->data(), cipher_buffer_len));
     return static_cast<int64_t>(cipher_buffer_len);
+  }
+
+  seastar::future<int64_t> SerializeEncryptedObj(seastarized::FutureOutputStream* out, uint8_t* out_buffer,
+                                uint32_t out_length,
+                                const std::shared_ptr<Encryptor>& encryptor) {
+    std::shared_ptr<ResizableBuffer> cipher_buffer =
+        std::static_pointer_cast<ResizableBuffer>(AllocateBuffer(
+            encryptor->pool(),
+            static_cast<int64_t>(encryptor->CiphertextSizeDelta() + out_length)));
+    int cipher_buffer_len =
+        encryptor->Encrypt(out_buffer, out_length, cipher_buffer->mutable_data());
+
+    return out->Write(cipher_buffer->data(), cipher_buffer_len).then([=] {
+      return static_cast<int64_t>(cipher_buffer_len);
+    });
   }
 
   shared_ptr<ThriftBuffer> mem_buffer_;
