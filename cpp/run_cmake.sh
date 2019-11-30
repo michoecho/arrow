@@ -1,6 +1,7 @@
 #!/bin/bash
 cmake .. \
 -GNinja \
+-DCMAKE_BUILD_TYPE=Debug \
 -DARROW_BUILD_SHARED=OFF \
 -DARROW_BUILD_TESTS=ON \
 -DARROW_TEST_LINKAGE=static \
