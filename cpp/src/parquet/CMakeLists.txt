@@ -372,6 +372,7 @@ add_seastar_test(arrow-test
 add_seastar_test(seastar-test
                  SOURCES
                  arrow/arrow_reader_writer_test_seastar.cc
+                 column_writer_test_seastar.cc
                  test_main.cc
                  test_util.cc)
 

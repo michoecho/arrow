@@ -2389,15 +2389,20 @@ seastar::future<> ColumnWriterImpl::FlushBufferedDataPages() {
 // TypedColumnWriter
 
 template <typename Action>
-inline void DoInBatches(int64_t total, int64_t batch_size, Action&& action) {
+inline seastar::future<> DoInBatches(int64_t total, int64_t batch_size, Action&& action) {
   int64_t num_batches = static_cast<int>(total / batch_size);
-  for (int round = 0; round < num_batches; round++) {
-    action(round * batch_size, batch_size);
-  }
-  // Write the remaining values
-  if (total % batch_size > 0) {
-    action(num_batches * batch_size, total % batch_size);
-  }
+  return seastar::do_for_each(
+    boost::counting_iterator<int>(0),
+    boost::counting_iterator<int>(num_batches),
+    [=] (int round) {
+      return action(round * batch_size, batch_size);
+  }).then([=] {;
+    // Write the remaining values
+    if (total % batch_size > 0) {
+      return action(num_batches * batch_size, total % batch_size);
+    }
+    return seastar::make_ready_future<>();
+  });  
 }
 
 bool DictionaryDirectWriteSupported(const arrow::Array& array) {
@@ -2432,7 +2437,6 @@ static inline bool IsDictionaryEncoding(Encoding::type encoding) {
   return encoding == Encoding::PLAIN_DICTIONARY;
 }
 
-#if 0
 template <typename DType>
 class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<DType> {
  public:
@@ -2453,56 +2457,59 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
     }
   }
 
-  int64_t Close() override { return ColumnWriterImpl::Close(); }
+  seastar::future<int64_t> Close() override { return ColumnWriterImpl::Close(); }
 
-  void WriteBatch(int64_t num_values, const int16_t* def_levels,
+  seastar::future<> WriteBatch(int64_t num_values, const int16_t* def_levels,
                   const int16_t* rep_levels, const T* values) override {
     // We check for DataPage limits only after we have inserted the values. If a user
     // writes a large number of values, the DataPage size can be much above the limit.
     // The purpose of this chunking is to bound this. Even if a user writes large number
     // of values, the chunking will ensure the AddDataPage() is called at a reasonable
     // pagesize limit
-    int64_t value_offset = 0;
-    auto WriteChunk = [&](int64_t offset, int64_t batch_size) {
+    std::shared_ptr<int64_t> value_offset = std::make_shared<int64_t>(0);
+    auto WriteChunk = [=](int64_t offset, int64_t batch_size) {
       int64_t values_to_write =
           WriteLevels(batch_size, def_levels + offset, rep_levels + offset);
       // PARQUET-780
       if (values_to_write > 0) {
         DCHECK_NE(nullptr, values);
       }
-      WriteValues(values + value_offset, values_to_write, batch_size - values_to_write);
-      CommitWriteAndCheckPageLimit(batch_size, values_to_write);
-      value_offset += values_to_write;
+      WriteValues(values + *value_offset, values_to_write, batch_size - values_to_write);
+      return CommitWriteAndCheckPageLimit(batch_size, values_to_write).then([=] {
+        *value_offset += values_to_write;
 
-      // Dictionary size checked separately from data page size since we
-      // circumvent this check when writing arrow::DictionaryArray directly
-      CheckDictionarySizeLimit();
+        // Dictionary size checked separately from data page size since we
+        // circumvent this check when writing arrow::DictionaryArray directly
+        return CheckDictionarySizeLimit();
+      });
     };
-    DoInBatches(num_values, properties_->write_batch_size(), WriteChunk);
+    return DoInBatches(num_values, properties_->write_batch_size(), WriteChunk);
   }
 
   void WriteBatchSpaced(int64_t num_values, const int16_t* def_levels,
                         const int16_t* rep_levels, const uint8_t* valid_bits,
                         int64_t valid_bits_offset, const T* values) override {
     // Like WriteBatch, but for spaced values
-    int64_t value_offset = 0;
+    std::shared_ptr<int64_t> value_offset = std::make_shared<int64_t>(0);
     auto WriteChunk = [&](int64_t offset, int64_t batch_size) {
       int64_t batch_num_values = 0;
       int64_t batch_num_spaced_values = 0;
       WriteLevelsSpaced(batch_size, def_levels + offset, rep_levels + offset,
                         &batch_num_values, &batch_num_spaced_values);
-      WriteValuesSpaced(values + value_offset, batch_num_values, batch_num_spaced_values,
-                        valid_bits, valid_bits_offset + value_offset);
-      CommitWriteAndCheckPageLimit(batch_size, batch_num_spaced_values);
-      value_offset += batch_num_spaced_values;
+      WriteValuesSpaced(values + *value_offset, batch_num_values, batch_num_spaced_values,
+                        valid_bits, valid_bits_offset + *value_offset);
+      return CommitWriteAndCheckPageLimit(batch_size, batch_num_spaced_values).then([=] {
+        *value_offset += batch_num_spaced_values;
 
-      // Dictionary size checked separately from data page size since we
-      // circumvent this check when writing arrow::DictionaryArray directly
-      CheckDictionarySizeLimit();
+        // Dictionary size checked separately from data page size since we
+        // circumvent this check when writing arrow::DictionaryArray directly
+        return CheckDictionarySizeLimit();
+      });
     };
-    DoInBatches(num_values, properties_->write_batch_size(), WriteChunk);
+    return DoInBatches(num_values, properties_->write_batch_size(), WriteChunk);
   }
 
+#if 0
   Status WriteArrow(const int16_t* def_levels, const int16_t* rep_levels,
                     int64_t num_levels, const arrow::Array& array,
                     ArrowWriteContext* ctx) override {
@@ -2512,6 +2519,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
       return WriteArrowDense(def_levels, rep_levels, num_levels, array, ctx);
     }
   }
+#endif
 
   int64_t EstimatedBufferedValueBytes() const override {
     return current_encoder_->EstimatedDataEncodedSize();
@@ -2533,7 +2541,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
                          int64_t num_levels, const arrow::Array& array,
                          ArrowWriteContext* context);
 
-  void WriteDictionaryPage() override {
+  seastar::future<> WriteDictionaryPage() override {
     // We have to dynamic cast here because of TypedEncoder<Type> as
     // some compilers don't want to cast through virtual inheritance
     auto dict_encoder = dynamic_cast<DictEncoder<DType>*>(current_encoder_.get());
@@ -2544,7 +2552,9 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
 
     DictionaryPage page(buffer, dict_encoder->num_entries(),
                         properties_->dictionary_page_encoding());
-    total_bytes_written_ += pager_->WriteDictionaryPage(page);
+    return pager_->WriteDictionaryPage(page).then([=] (int64_t bytes_written) {
+      total_bytes_written_ += bytes_written;
+    });
   }
 
   EncodedStatistics GetPageStatistics() override {
@@ -2674,26 +2684,30 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
     *out_spaced_values_to_write = spaced_values_to_write;
   }
 
-  void CommitWriteAndCheckPageLimit(int64_t num_levels, int64_t num_values) {
+  seastar::future<> CommitWriteAndCheckPageLimit(int64_t num_levels, int64_t num_values) {
     num_buffered_values_ += num_levels;
     num_buffered_encoded_values_ += num_values;
 
     if (current_encoder_->EstimatedDataEncodedSize() >= properties_->data_pagesize()) {
-      AddDataPage();
+      return AddDataPage();
     }
+    return seastar::make_ready_future<>();
   }
 
-  void FallbackToPlainEncoding() {
-    if (IsDictionaryEncoding(current_encoder_->encoding())) {
-      WriteDictionaryPage();
-      // Serialize the buffered Dictionary Indicies
-      FlushBufferedDataPages();
-      fallback_ = true;
-      // Only PLAIN encoding is supported for fallback in V1
-      current_encoder_ = MakeEncoder(DType::type_num, Encoding::PLAIN, false, descr_,
-                                     properties_->memory_pool());
-      encoding_ = Encoding::PLAIN;
+  seastar::future<> FallbackToPlainEncoding() {
+    if (seastarized::IsDictionaryEncoding(current_encoder_->encoding())) {
+      return WriteDictionaryPage().then([=] {
+        return FlushBufferedDataPages();
+      }).then([=] {
+        // Serialize the buffered Dictionary Indicies
+        fallback_ = true;
+        // Only PLAIN encoding is supported for fallback in V1
+        current_encoder_ = MakeEncoder(DType::type_num, Encoding::PLAIN, false, descr_,
+                                       properties_->memory_pool());
+        encoding_ = Encoding::PLAIN;
+      });
     }
+    return seastar::make_ready_future<>();
   }
 
   // Checks if the Dictionary Page size limit is reached
@@ -2702,21 +2716,21 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
   //
   // Only one Dictionary Page is written.
   // Fallback to PLAIN if dictionary page limit is reached.
-  void CheckDictionarySizeLimit() {
+  seastar::future<> CheckDictionarySizeLimit() {
     if (!has_dictionary_ || fallback_) {
       // Either not using dictionary encoding, or we have already fallen back
       // to PLAIN encoding because the size threshold was reached
-      return;
+      return seastar::make_ready_future<>();
     }
 
     // We have to dynamic cast here because TypedEncoder<Type> as some compilers
     // don't want to cast through virtual inheritance
     auto dict_encoder = dynamic_cast<DictEncoder<DType>*>(current_encoder_.get());
     if (dict_encoder->dict_encoded_size() >= properties_->dictionary_pagesize_limit()) {
-      FallbackToPlainEncoding();
+      return FallbackToPlainEncoding();
     }
+    return seastar::make_ready_future<>();
   }
-
   void WriteValues(const T* values, int64_t num_values, int64_t num_nulls) {
     dynamic_cast<ValueEncoderType*>(current_encoder_.get())
         ->Put(values, static_cast<int>(num_values));
@@ -2743,6 +2757,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
   }
 };
 
+#if 0
 template <typename DType>
 Status TypedColumnWriterImpl<DType>::WriteArrowDictionary(const int16_t* def_levels,
                                                           const int16_t* rep_levels,

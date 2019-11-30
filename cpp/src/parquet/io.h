@@ -49,7 +49,7 @@ class MemoryFutureOutputStream : public FutureOutputStream {
 
  public:
   MemoryFutureOutputStream(const std::shared_ptr<::arrow::io::BufferOutputStream>& sink)
-    : sink_(std::move(sink)) {}
+    : sink_(sink) {}
 
   seastar::future<> Write(const std::shared_ptr<Buffer>& data) override {
     PARQUET_THROW_NOT_OK(sink_->Write(data));
@@ -74,6 +74,10 @@ class MemoryFutureOutputStream : public FutureOutputStream {
     int64_t pos;
     PARQUET_THROW_NOT_OK(sink_->Tell(&pos));
     return pos;
+  }
+
+  ::arrow::Status Finish(std::shared_ptr<Buffer>* result) {
+    return sink_->Finish(result);
   }
 };
 
