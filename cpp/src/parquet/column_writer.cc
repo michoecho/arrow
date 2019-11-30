@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <boost/iterator/counting_iterator.hpp>
 #include "parquet/column_writer.h"
 #include "parquet/io.h"
 
@@ -1907,8 +1908,8 @@ class SerializedPageWriter : public PageWriter {
     }
 
     return thrift_serializer_->Serialize(&page_header, sink_.get(), meta_encryptor_).then(
-    [=] (int64_t header_size) {
-      return sink_->Write(output_data_buffer, output_data_len).then([=] {
+    [=, &page] (int64_t header_size) {
+      return sink_->Write(output_data_buffer, output_data_len).then([=, &page] {
         total_uncompressed_size_ += uncompressed_size + header_size;
         total_compressed_size_ += output_data_len + header_size;
         num_values_ += page.num_values();
@@ -2080,6 +2081,8 @@ std::unique_ptr<PageWriter> PageWriter::Open(
   }
 }
 
+#endif
+
 // ----------------------------------------------------------------------
 // ColumnWriter
 
@@ -2124,13 +2127,13 @@ class ColumnWriterImpl {
 
   virtual ~ColumnWriterImpl() = default;
 
-  int64_t Close();
+  seastar::future<int64_t> Close();
 
  protected:
   virtual std::shared_ptr<Buffer> GetValuesBuffer() = 0;
 
   // Serializes Dictionary Page if enabled
-  virtual void WriteDictionaryPage() = 0;
+  virtual seastar::future<> WriteDictionaryPage() = 0;
 
   // Plain-encoded statistics of the current page
   virtual EncodedStatistics GetPageStatistics() = 0;
@@ -2143,11 +2146,13 @@ class ColumnWriterImpl {
 
   // Adds Data Pages to an in memory buffer in dictionary encoding mode
   // Serializes the Data Pages in other encoding modes
-  void AddDataPage();
+  seastar::future<> AddDataPage();
 
   // Serializes Data Pages
-  void WriteDataPage(const CompressedDataPage& page) {
-    total_bytes_written_ += pager_->WriteDataPage(page);
+  seastar::future<> WriteDataPage(const CompressedDataPage& page) {
+    return pager_->WriteDataPage(page).then([=] (int64_t bytes_written) {
+      total_bytes_written_ += bytes_written;
+    });
   }
 
   // Write multiple definition levels
@@ -2169,7 +2174,7 @@ class ColumnWriterImpl {
                           int16_t max_level);
 
   // Serialize the buffered Data Pages
-  void FlushBufferedDataPages();
+  seastar::future<> FlushBufferedDataPages();
 
   ColumnChunkMetaDataBuilder* metadata_;
   const ColumnDescriptor* descr_;
@@ -2253,7 +2258,7 @@ int64_t ColumnWriterImpl::RleEncodeLevels(const void* src_buffer,
   return encoded_size;
 }
 
-void ColumnWriterImpl::AddDataPage() {
+seastar::future<> ColumnWriterImpl::AddDataPage() {
   int64_t definition_levels_rle_size = 0;
   int64_t repetition_levels_rle_size = 0;
 
@@ -2310,53 +2315,74 @@ void ColumnWriterImpl::AddDataPage() {
                             Encoding::RLE, Encoding::RLE, uncompressed_size, page_stats);
     total_compressed_bytes_ += page.size() + sizeof(format::PageHeader);
     data_pages_.push_back(std::move(page));
+
+    // Re-initialize the sinks for next Page.
+    InitSinks();
+    num_buffered_values_ = 0;
+    num_buffered_encoded_values_ = 0;
+    return seastar::make_ready_future<>();
   } else {  // Eagerly write pages
     CompressedDataPage page(compressed_data, static_cast<int32_t>(num_buffered_values_),
                             encoding_, Encoding::RLE, Encoding::RLE, uncompressed_size,
                             page_stats);
-    WriteDataPage(page);
+    return WriteDataPage(page).then([=] {
+      // Re-initialize the sinks for next Page.
+      InitSinks();
+      num_buffered_values_ = 0;
+      num_buffered_encoded_values_ = 0;
+    });
   }
-
-  // Re-initialize the sinks for next Page.
-  InitSinks();
-  num_buffered_values_ = 0;
-  num_buffered_encoded_values_ = 0;
 }
 
-int64_t ColumnWriterImpl::Close() {
-  if (!closed_) {
-    closed_ = true;
-    if (has_dictionary_ && !fallback_) {
-      WriteDictionaryPage();
+seastar::future<int64_t> ColumnWriterImpl::Close() {
+  return [=] {
+    if (!closed_) {
+      closed_ = true;
+      return [=] {
+        if (has_dictionary_ && !fallback_) {
+          return WriteDictionaryPage();
+        }
+        return seastar::make_ready_future<>();
+      } ().then([=] {
+        return FlushBufferedDataPages();
+      }).then([=] {
+        EncodedStatistics chunk_statistics = GetChunkStatistics();
+        chunk_statistics.ApplyStatSizeLimits(
+            properties_->max_statistics_size(descr_->path()));
+        chunk_statistics.set_is_signed(SortOrder::SIGNED == descr_->sort_order());
+
+        // Write stats only if the column has at least one row written
+        if (rows_written_ > 0 && chunk_statistics.is_set()) {
+          metadata_->SetStatistics(chunk_statistics);
+        }
+        return pager_->Close(has_dictionary_, fallback_);
+      });
     }
+    return seastar::make_ready_future<>();
+  } ().then([=] {
+    return total_bytes_written_;
+  });
 
-    FlushBufferedDataPages();
-
-    EncodedStatistics chunk_statistics = GetChunkStatistics();
-    chunk_statistics.ApplyStatSizeLimits(
-        properties_->max_statistics_size(descr_->path()));
-    chunk_statistics.set_is_signed(SortOrder::SIGNED == descr_->sort_order());
-
-    // Write stats only if the column has at least one row written
-    if (rows_written_ > 0 && chunk_statistics.is_set()) {
-      metadata_->SetStatistics(chunk_statistics);
-    }
-    pager_->Close(has_dictionary_, fallback_);
-  }
-
-  return total_bytes_written_;
 }
 
-void ColumnWriterImpl::FlushBufferedDataPages() {
+seastar::future<> ColumnWriterImpl::FlushBufferedDataPages() {
   // Write all outstanding data to a new page
-  if (num_buffered_values_ > 0) {
-    AddDataPage();
-  }
-  for (size_t i = 0; i < data_pages_.size(); i++) {
-    WriteDataPage(data_pages_[i]);
-  }
-  data_pages_.clear();
-  total_compressed_bytes_ = 0;
+  return [=] {
+    if (num_buffered_values_ > 0) {
+      return AddDataPage();
+    }
+    return seastar::make_ready_future<>();
+  } ().then([=] {
+    return seastar::do_for_each(
+      boost::counting_iterator<size_t>(0),
+      boost::counting_iterator<size_t>(data_pages_.size()),
+      [=] (size_t i) {
+        return WriteDataPage(data_pages_[i]);
+      });
+  }).then([=] {
+    data_pages_.clear();
+    total_compressed_bytes_ = 0;
+  });
 }
 
 // ----------------------------------------------------------------------
@@ -2406,6 +2432,7 @@ static inline bool IsDictionaryEncoding(Encoding::type encoding) {
   return encoding == Encoding::PLAIN_DICTIONARY;
 }
 
+#if 0
 template <typename DType>
 class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<DType> {
  public:
