@@ -30,6 +30,7 @@
 #include "parquet/properties.h"
 #include "parquet/schema.h"
 #include "parquet/types.h"
+#include "parquet/io.h"
 
 namespace parquet {
 
@@ -315,6 +316,7 @@ class PARQUET_EXPORT ColumnChunkMetaDataBuilder {
 
   // For writing metadata at end of column chunk
   void WriteTo(::arrow::io::OutputStream* sink);
+  seastar::future<int64_t> WriteTo(seastarized::FutureOutputStream* sink);
 
  private:
   explicit ColumnChunkMetaDataBuilder(const std::shared_ptr<WriterProperties>& props,
