@@ -16,6 +16,7 @@
 // under the License.
 
 #include "parquet/column_writer.h"
+#include "parquet/io.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -1739,7 +1740,6 @@ std::shared_ptr<ColumnWriter> ColumnWriter::Make(ColumnChunkMetaDataBuilder* met
 }
 
 namespace seastarized {
-#if 0
 // ----------------------------------------------------------------------
 // PageWriter implementation
 
@@ -1748,7 +1748,7 @@ namespace seastarized {
 // and the page metadata.
 class SerializedPageWriter : public PageWriter {
  public:
-  SerializedPageWriter(const std::shared_ptr<seastar::output_stream>& sink,
+  SerializedPageWriter(const std::shared_ptr<FutureOutputStream>& sink,
                        Compression::type codec, int compression_level,
                        ColumnChunkMetaDataBuilder* metadata, int16_t row_group_ordinal,
                        int16_t column_chunk_ordinal,
@@ -1775,7 +1775,7 @@ class SerializedPageWriter : public PageWriter {
     thrift_serializer_.reset(new ThriftSerializer);
   }
 
-  int64_t WriteDictionaryPage(const DictionaryPage& page) override {
+  seastar::future<int64_t> WriteDictionaryPage(const DictionaryPage& page) override {
     int64_t uncompressed_size = page.size();
     std::shared_ptr<Buffer> compressed_data;
     if (has_compressor()) {
@@ -1812,8 +1812,7 @@ class SerializedPageWriter : public PageWriter {
     page_header.__set_dictionary_page_header(dict_page_header);
     // TODO(PARQUET-594) crc checksum
 
-    int64_t start_pos = -1;
-    PARQUET_THROW_NOT_OK(sink_->Tell(&start_pos));
+    int64_t start_pos = sink_->Tell();
     if (dictionary_page_offset_ == 0) {
       dictionary_page_offset_ = start_pos;
     }
@@ -1821,19 +1820,18 @@ class SerializedPageWriter : public PageWriter {
     if (meta_encryptor_) {
       UpdateEncryption(encryption::kDictionaryPageHeader);
     }
-    int64_t header_size =
-        thrift_serializer_->Serialize(&page_header, sink_.get(), meta_encryptor_);
+    return thrift_serializer_->Serialize(&page_header, sink_.get(), meta_encryptor_).then(
+    [=] (int64_t header_size) {
+        return sink_->Write(output_data_buffer, output_data_len).then([=] {
+          total_uncompressed_size_ += uncompressed_size + header_size;
+          total_compressed_size_ += output_data_len + header_size;
 
-    PARQUET_THROW_NOT_OK(sink_->Write(output_data_buffer, output_data_len));
-
-    total_uncompressed_size_ += uncompressed_size + header_size;
-    total_compressed_size_ += output_data_len + header_size;
-
-    int64_t final_pos = -1;
-    PARQUET_THROW_NOT_OK(sink_->Tell(&final_pos));
-    return final_pos - start_pos;
+          int64_t final_pos = sink_->Tell();
+          return final_pos - start_pos;
+        });
+      });
   }
-
+#if 0
   void Close(bool has_dictionary, bool fallback) override {
     if (meta_encryptor_ != nullptr) {
       UpdateEncryption(encryption::kColumnMetaData);
@@ -1935,6 +1933,7 @@ class SerializedPageWriter : public PageWriter {
   int64_t total_uncompressed_size() { return total_uncompressed_size_; }
 
  private:
+#endif
   void InitEncryption() {
     // Prepare the AAD for quick update later.
     if (data_encryptor_ != nullptr) {
@@ -1984,7 +1983,7 @@ class SerializedPageWriter : public PageWriter {
     }
   }
 
-  std::shared_ptr<seastar::output_stream> sink_;
+  std::shared_ptr<FutureOutputStream> sink_;
   ColumnChunkMetaDataBuilder* metadata_;
   MemoryPool* pool_;
   int64_t num_values_;
@@ -2008,6 +2007,7 @@ class SerializedPageWriter : public PageWriter {
   std::shared_ptr<Encryptor> data_encryptor_;
 };
 
+#if 0
 // This implementation of the PageWriter writes to the final sink on Close .
 class BufferedPageWriter : public PageWriter {
  public:
