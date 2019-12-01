@@ -89,7 +89,7 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
         ColumnReader::Make(this->descr_, std::move(page_reader)));
   }
 
-  std::shared_ptr<TypedColumnWriter<TestType>> BuildWriter(
+  std::shared_ptr<seastarized::TypedColumnWriter<TestType>> BuildWriter(
       int64_t output_size = SMALL_SIZE,
       const ColumnProperties& column_properties = ColumnProperties(),
       const ParquetVersion::type version = ParquetVersion::PARQUET_1_0) {
@@ -116,7 +116,6 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
     return std::static_pointer_cast<seastarized::TypedColumnWriter<TestType>>(writer);
   }
 
-#if 0
   void ReadColumn(Compression::type compression = Compression::UNCOMPRESSED) {
     BuildReader(static_cast<int64_t>(this->values_out_.size()), compression);
     reader_->ReadBatch(static_cast<int>(this->values_out_.size()),
@@ -159,8 +158,8 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
 
     auto writer = this->BuildWriter(VERY_LARGE_SIZE, column_properties, version);
 
-    writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_);
-    writer->Close();
+    writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_).get();
+    writer->Close().get();
 
     // Read all rows so we are sure that also the non-dictionary pages are read correctly
     this->SetupValuesOut(VERY_LARGE_SIZE);
@@ -196,12 +195,12 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
     ColumnProperties column_properties(encoding, compression, enable_dictionary,
                                        enable_statistics);
     column_properties.set_compression_level(compression_level);
-    std::shared_ptr<TypedColumnWriter<TestType>> writer =
+    std::shared_ptr<seastarized::TypedColumnWriter<TestType>> writer =
         this->BuildWriter(num_rows, column_properties);
-    writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_);
+    writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_).get();
     // The behaviour should be independent from the number of Close() calls
-    writer->Close();
-    writer->Close();
+    writer->Close().get();
+    writer->Close().get();
   }
 
   void WriteRequiredWithSettingsSpaced(Encoding::type encoding,
@@ -213,13 +212,13 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
     ColumnProperties column_properties(encoding, compression, enable_dictionary,
                                        enable_statistics);
     column_properties.set_compression_level(compression_level);
-    std::shared_ptr<TypedColumnWriter<TestType>> writer =
+    std::shared_ptr<seastarized::TypedColumnWriter<TestType>> writer =
         this->BuildWriter(num_rows, column_properties);
     writer->WriteBatchSpaced(this->values_.size(), nullptr, nullptr, valid_bits.data(), 0,
-                             this->values_ptr_);
+                             this->values_ptr_).get();
     // The behaviour should be independent from the number of Close() calls
-    writer->Close();
-    writer->Close();
+    writer->Close().get();
+    writer->Close().get();
   }
 
   void ReadAndCompare(Compression::type compression, int64_t num_rows) {
@@ -276,7 +275,6 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
     return metadata_accessor->encodings();
   }
 
-#endif
  protected:
   int64_t values_read_;
   // Keep the reader alive as for ByteArray the lifetime of the ByteArray
@@ -295,7 +293,6 @@ class TestPrimitiveWriter : public PrimitiveTypedTest<TestType> {
   std::vector<std::vector<uint8_t>> data_buffer_;
 };
 
-#if 0
 template <typename TestType>
 void TestPrimitiveWriter<TestType>::ReadColumnFully(Compression::type compression) {
   int64_t total_values = static_cast<int64_t>(this->values_out_.size());
@@ -496,8 +493,8 @@ TYPED_TEST(TestPrimitiveWriter, Optional) {
 
   auto writer = this->BuildWriter();
   writer->WriteBatch(this->values_.size(), definition_levels.data(), nullptr,
-                     this->values_ptr_);
-  writer->Close();
+                     this->values_ptr_).get();
+  writer->Close().get();
 
   // PARQUET-703
   ASSERT_EQ(100, this->metadata_num_values());
@@ -525,8 +522,8 @@ TYPED_TEST(TestPrimitiveWriter, OptionalSpaced) {
 
   auto writer = this->BuildWriter();
   writer->WriteBatchSpaced(this->values_.size(), definition_levels.data(), nullptr,
-                           valid_bits.data(), 0, this->values_ptr_);
-  writer->Close();
+                           valid_bits.data(), 0, this->values_ptr_).get();
+  writer->Close().get();
 
   // PARQUET-703
   ASSERT_EQ(100, this->metadata_num_values());
@@ -550,8 +547,8 @@ TYPED_TEST(TestPrimitiveWriter, Repeated) {
 
   auto writer = this->BuildWriter();
   writer->WriteBatch(this->values_.size(), definition_levels.data(),
-                     repetition_levels.data(), this->values_ptr_);
-  writer->Close();
+                     repetition_levels.data(), this->values_ptr_).get();
+  writer->Close().get();
 
   this->ReadColumn();
   ASSERT_EQ(SMALL_SIZE - 1, this->values_read_);
@@ -565,8 +562,8 @@ TYPED_TEST(TestPrimitiveWriter, RequiredLargeChunk) {
 
   // Test case 1: required and non-repeated, so no definition or repetition levels
   auto writer = this->BuildWriter(LARGE_SIZE);
-  writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_);
-  writer->Close();
+  writer->WriteBatch(this->values_.size(), nullptr, nullptr, this->values_ptr_).get();
+  writer->Close().get();
 
   // Just read the first SMALL_SIZE rows to ensure we could read it back in
   this->ReadColumn();
@@ -597,8 +594,8 @@ TEST_F(TestNullValuesWriter, OptionalNullValueChunk) {
   auto writer = this->BuildWriter(LARGE_SIZE);
   // All values being written are NULL
   writer->WriteBatch(this->values_.size(), definition_levels.data(),
-                     repetition_levels.data(), nullptr);
-  writer->Close();
+                     repetition_levels.data(), nullptr).get();
+  writer->Close().get();
 
   // Just read the first SMALL_SIZE rows to ensure we could read it back in
   this->ReadColumn();
@@ -613,9 +610,9 @@ TEST_F(TestBooleanValuesWriter, AlternateBooleanValues) {
   auto writer = this->BuildWriter();
   for (int i = 0; i < SMALL_SIZE; i++) {
     bool value = (i % 2 == 0) ? true : false;
-    writer->WriteBatch(1, nullptr, nullptr, &value);
+    writer->WriteBatch(1, nullptr, nullptr, &value).get();
   }
-  writer->Close();
+  writer->Close().get();
   this->ReadColumn();
   for (int i = 0; i < SMALL_SIZE; i++) {
     ASSERT_EQ((i % 2 == 0) ? true : false, this->values_out_[i]) << i;
@@ -633,8 +630,8 @@ TEST_F(TestByteArrayValuesWriter, OmitStats) {
 
   values_.resize(SMALL_SIZE);
   InitWideByteArrayValues(SMALL_SIZE, this->values_, this->buffer_, min_len, max_len);
-  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_.data());
-  writer->Close();
+  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_.data()).get();
+  writer->Close().get();
 
   auto has_min_max = this->metadata_stats_has_min_max();
   ASSERT_FALSE(has_min_max.first);
@@ -653,8 +650,8 @@ TEST_F(TestByteArrayValuesWriter, OmitDataPageStats) {
 
   values_.resize(1);
   InitWideByteArrayValues(1, this->values_, this->buffer_, min_len, max_len);
-  writer->WriteBatch(1, nullptr, nullptr, this->values_.data());
-  writer->Close();
+  writer->WriteBatch(1, nullptr, nullptr, this->values_.data()).get();
+  writer->Close().get();
 
   ASSERT_NO_THROW(this->ReadColumn());
 }
@@ -669,8 +666,8 @@ TEST_F(TestByteArrayValuesWriter, LimitStats) {
 
   values_.resize(SMALL_SIZE);
   InitWideByteArrayValues(SMALL_SIZE, this->values_, this->buffer_, min_len, max_len);
-  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_.data());
-  writer->Close();
+  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_.data()).get();
+  writer->Close().get();
 
   ASSERT_TRUE(this->metadata_is_stats_set());
 }
@@ -680,8 +677,8 @@ TEST_F(TestByteArrayValuesWriter, CheckDefaultStats) {
   auto writer = this->BuildWriter();
   this->GenerateData(SMALL_SIZE);
 
-  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_ptr_);
-  writer->Close();
+  writer->WriteBatch(SMALL_SIZE, nullptr, nullptr, this->values_ptr_).get();
+  writer->Close().get();
 
   ASSERT_TRUE(this->metadata_is_stats_set());
 }
@@ -702,16 +699,16 @@ TEST(TestColumnWriter, RepeatedListsUpdateSpacedBug) {
   SchemaDescriptor schema;
   schema.Init(root);
 
-  auto sink = CreateOutputStream();
+  auto sink = std::make_shared<seastarized::MemoryFutureOutputStream>(CreateOutputStream());
   auto props = WriterProperties::Builder().build();
 
   auto metadata = ColumnChunkMetaDataBuilder::Make(props, schema.Column(0));
-  std::unique_ptr<PageWriter> pager =
-      PageWriter::Open(sink, Compression::UNCOMPRESSED,
+  std::unique_ptr<seastarized::PageWriter> pager =
+      seastarized::PageWriter::Open(sink, Compression::UNCOMPRESSED,
                        Codec::UseDefaultCompressionLevel(), metadata.get());
-  std::shared_ptr<ColumnWriter> writer =
-      ColumnWriter::Make(metadata.get(), std::move(pager), props.get());
-  auto typed_writer = std::static_pointer_cast<TypedColumnWriter<Int32Type>>(writer);
+  std::shared_ptr<seastarized::ColumnWriter> writer =
+      seastarized::ColumnWriter::Make(metadata.get(), std::move(pager), props.get());
+  auto typed_writer = std::static_pointer_cast<seastarized::TypedColumnWriter<Int32Type>>(writer);
 
   std::vector<int16_t> def_levels = {1, 3, 3, 2, 3, 3, 3, 2, 3, 3, 3, 2, 3, 3};
   std::vector<int16_t> rep_levels = {0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
@@ -729,8 +726,8 @@ TEST(TestColumnWriter, RepeatedListsUpdateSpacedBug) {
 
   // valgrind will warn about out of bounds access into def_levels_data
   typed_writer->WriteBatchSpaced(14, def_levels.data(), rep_levels.data(),
-                                 valid_bits->data(), 0, values_data);
-  writer->Close();
+                                 valid_bits->data(), 0, values_data).get();
+  writer->Close().get();
 }
 
 void GenerateLevels(int min_repeat_factor, int max_repeat_factor, int max_level,
@@ -952,7 +949,6 @@ TEST(TestLevelEncoder, MinimumBufferSize2) {
     ASSERT_EQ(kNumToEncode, encode_count);
   }
 }
-#endif
 
 }  // namespace test
 }  // namespace parquet

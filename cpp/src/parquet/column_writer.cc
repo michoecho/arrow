@@ -1833,11 +1833,11 @@ class SerializedPageWriter : public PageWriter {
       output_data_buffer = encrypted_data_buffer->data();
     }
 
-    format::PageHeader page_header;
-    page_header.__set_type(format::PageType::DICTIONARY_PAGE);
-    page_header.__set_uncompressed_page_size(static_cast<int32_t>(uncompressed_size));
-    page_header.__set_compressed_page_size(static_cast<int32_t>(output_data_len));
-    page_header.__set_dictionary_page_header(dict_page_header);
+    auto page_header = std::make_shared<format::PageHeader>();
+    page_header->__set_type(format::PageType::DICTIONARY_PAGE);
+    page_header->__set_uncompressed_page_size(static_cast<int32_t>(uncompressed_size));
+    page_header->__set_compressed_page_size(static_cast<int32_t>(output_data_len));
+    page_header->__set_dictionary_page_header(dict_page_header);
     // TODO(PARQUET-594) crc checksum
 
     int64_t start_pos = sink_->Tell();
@@ -1848,16 +1848,16 @@ class SerializedPageWriter : public PageWriter {
     if (meta_encryptor_) {
       UpdateEncryption(encryption::kDictionaryPageHeader);
     }
-    return thrift_serializer_->Serialize(&page_header, sink_.get(), meta_encryptor_).then(
+    return thrift_serializer_->Serialize(page_header.get(), sink_.get(), meta_encryptor_).then(
     [=] (int64_t header_size) {
-        return sink_->Write(output_data_buffer, output_data_len).then([=] {
-          total_uncompressed_size_ += uncompressed_size + header_size;
-          total_compressed_size_ += output_data_len + header_size;
+      return sink_->Write(output_data_buffer, output_data_len).then([=] {
+        total_uncompressed_size_ += uncompressed_size + header_size;
+        total_compressed_size_ += output_data_len + header_size;
 
-          int64_t final_pos = sink_->Tell();
-          return final_pos - start_pos;
-        });
+        int64_t final_pos = sink_->Tell();
+        return final_pos - start_pos;
       });
+    }).finally([compressed_data, encrypted_data_buffer, page_header]{});
   }
 
   seastar::future<> Close(bool has_dictionary, bool fallback) override {
@@ -1918,11 +1918,11 @@ class SerializedPageWriter : public PageWriter {
       output_data_buffer = encrypted_data_buffer->data();
     }
 
-    format::PageHeader page_header;
-    page_header.__set_type(format::PageType::DATA_PAGE);
-    page_header.__set_uncompressed_page_size(static_cast<int32_t>(uncompressed_size));
-    page_header.__set_compressed_page_size(static_cast<int32_t>(output_data_len));
-    page_header.__set_data_page_header(data_page_header);
+    auto page_header = std::make_shared<format::PageHeader>();
+    page_header->__set_type(format::PageType::DATA_PAGE);
+    page_header->__set_uncompressed_page_size(static_cast<int32_t>(uncompressed_size));
+    page_header->__set_compressed_page_size(static_cast<int32_t>(output_data_len));
+    page_header->__set_data_page_header(data_page_header);
     // TODO(PARQUET-594) crc checksum
 
     int64_t start_pos = sink_->Tell();
@@ -1934,7 +1934,7 @@ class SerializedPageWriter : public PageWriter {
       UpdateEncryption(encryption::kDataPageHeader);
     }
 
-    return thrift_serializer_->Serialize(&page_header, sink_.get(), meta_encryptor_).then(
+    return thrift_serializer_->Serialize(page_header.get(), sink_.get(), meta_encryptor_).then(
     [=, &page] (int64_t header_size) {
       return sink_->Write(output_data_buffer, output_data_len).then([=, &page] {
         total_uncompressed_size_ += uncompressed_size + header_size;
@@ -1945,7 +1945,7 @@ class SerializedPageWriter : public PageWriter {
         int64_t current_pos = sink_->Tell();
         return current_pos - start_pos;
       });
-    });
+    }).finally([compressed_data, encrypted_data_buffer, page_header]{});
   }
 
   bool has_compressor() override { return (compressor_ != nullptr); }
@@ -2346,10 +2346,11 @@ seastar::future<> ColumnWriterImpl::AddDataPage() {
     num_buffered_encoded_values_ = 0;
     return seastar::make_ready_future<>();
   } else {  // Eagerly write pages
-    CompressedDataPage page(compressed_data, static_cast<int32_t>(num_buffered_values_),
-                            encoding_, Encoding::RLE, Encoding::RLE, uncompressed_size,
-                            page_stats);
-    return WriteDataPage(page).then([=] {
+    auto page = std::make_shared<CompressedDataPage>(
+        compressed_data, static_cast<int32_t>(num_buffered_values_),
+        encoding_, Encoding::RLE, Encoding::RLE, uncompressed_size,
+        page_stats);
+    return WriteDataPage(*page).then([this] {
       // Re-initialize the sinks for next Page.
       InitSinks();
       num_buffered_values_ = 0;
@@ -2359,17 +2360,17 @@ seastar::future<> ColumnWriterImpl::AddDataPage() {
 }
 
 seastar::future<int64_t> ColumnWriterImpl::Close() {
-  return [=] {
+  return [this] {
     if (!closed_) {
       closed_ = true;
-      return [=] {
+      return [this] {
         if (has_dictionary_ && !fallback_) {
           return WriteDictionaryPage();
         }
         return seastar::make_ready_future<>();
-      } ().then([=] {
+      } ().then([this] {
         return FlushBufferedDataPages();
-      }).then([=] {
+      }).then([this] {
         EncodedStatistics chunk_statistics = GetChunkStatistics();
         chunk_statistics.ApplyStatSizeLimits(
             properties_->max_statistics_size(descr_->path()));
@@ -2383,7 +2384,7 @@ seastar::future<int64_t> ColumnWriterImpl::Close() {
       });
     }
     return seastar::make_ready_future<>();
-  } ().then([=] {
+  } ().then([this] {
     return total_bytes_written_;
   });
 
@@ -2391,19 +2392,19 @@ seastar::future<int64_t> ColumnWriterImpl::Close() {
 
 seastar::future<> ColumnWriterImpl::FlushBufferedDataPages() {
   // Write all outstanding data to a new page
-  return [=] {
+  return [this] {
     if (num_buffered_values_ > 0) {
       return AddDataPage();
     }
     return seastar::make_ready_future<>();
-  } ().then([=] {
+  } ().then([this] {
     return seastar::do_for_each(
       boost::counting_iterator<size_t>(0),
       boost::counting_iterator<size_t>(data_pages_.size()),
-      [=] (size_t i) {
+      [this] (size_t i) {
         return WriteDataPage(data_pages_[i]);
       });
-  }).then([=] {
+  }).then([this] {
     data_pages_.clear();
     total_compressed_bytes_ = 0;
   });
@@ -2515,7 +2516,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
                         int64_t valid_bits_offset, const T* values) override {
     // Like WriteBatch, but for spaced values
     std::shared_ptr<int64_t> value_offset = std::make_shared<int64_t>(0);
-    auto WriteChunk = [&](int64_t offset, int64_t batch_size) {
+    auto WriteChunk = [=](int64_t offset, int64_t batch_size) {
       int64_t batch_num_values = 0;
       int64_t batch_num_spaced_values = 0;
       WriteLevelsSpaced(batch_size, def_levels + offset, rep_levels + offset,
@@ -2576,7 +2577,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
 
     DictionaryPage page(buffer, dict_encoder->num_entries(),
                         properties_->dictionary_page_encoding());
-    return pager_->WriteDictionaryPage(page).then([=] (int64_t bytes_written) {
+    return pager_->WriteDictionaryPage(page).then([this] (int64_t bytes_written) {
       total_bytes_written_ += bytes_written;
     });
   }
@@ -2720,9 +2721,9 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
 
   seastar::future<> FallbackToPlainEncoding() {
     if (seastarized::IsDictionaryEncoding(current_encoder_->encoding())) {
-      return WriteDictionaryPage().then([=] {
+      return WriteDictionaryPage().then([this] {
         return FlushBufferedDataPages();
-      }).then([=] {
+      }).then([this] {
         // Serialize the buffered Dictionary Indicies
         fallback_ = true;
         // Only PLAIN encoding is supported for fallback in V1
