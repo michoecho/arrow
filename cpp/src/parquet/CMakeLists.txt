@@ -375,6 +375,12 @@ add_seastar_test(seastar-test
                  test_main.cc
                  test_util.cc)
 
+add_seastar_test(seastar-test-2
+                 SOURCES
+                 file_serialize_test_seastar.cc
+                 test_main.cc
+                 test_util.cc)
+
 if(PARQUET_REQUIRE_ENCRYPTION)
   add_seastar_test(encryption-test
                    SOURCES
