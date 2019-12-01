@@ -556,6 +556,36 @@ class FileMetaData::FileMetaDataImpl {
     }
   }
 
+  seastar::future<> WriteTo(seastarized::FutureOutputStream* dst,
+               const std::shared_ptr<Encryptor>& encryptor) const {
+    auto serializer = std::make_shared<ThriftSerializer>();
+    // Only in encrypted files with plaintext footers the
+    // encryption_algorithm is set in footer
+    if (is_encryption_algorithm_set()) {
+      uint8_t* serialized_data;
+      uint32_t serialized_len;
+      serializer.SerializeToBuffer(metadata_.get(), &serialized_len, &serialized_data);
+
+      // encrypt the footer key
+      auto encrypted_data = std::make_shared<std::vector<uint8_t>>(
+          encryptor->CiphertextSizeDelta() + serialized_len);
+      unsigned encrypted_len =
+          encryptor->Encrypt(serialized_data, serialized_len, encrypted_data->data());
+
+      // write unencrypted footer
+      return dst->Write(serialized_data, serialized_len).then([=] {
+      // Write signature (nonce and tag)
+        return dst->Write(encrypted_data->data() + 4, encryption::kNonceLength);
+      }).then([=] {
+        return dst->Write(encrypted_data->data() + encrypted_len - encryption::kGcmTagLength,
+                     encryption::kGcmTagLength);
+      });
+    } else {  // either plaintext file (when encryptor is null)
+      // or encrypted file with encrypted footer
+      return serializer.Serialize(metadata_.get(), dst, encryptor);
+    }
+  }
+
   std::unique_ptr<RowGroupMetaData> RowGroup(int i) {
     if (!(i < num_row_groups())) {
       std::stringstream ss;
@@ -743,6 +773,11 @@ class FileCryptoMetaData::FileCryptoMetaDataImpl {
     serializer.Serialize(metadata_.get(), dst);
   }
 
+  seastar::future<> WriteTo(FutureOutputStream* dst) const {
+    auto serializer = std::make_unique<ThriftSerializer>();
+    return serializer.Serialize(metadata_.get(), dst).finally([serializer = std::move(serializer)]);
+  }
+
  private:
   friend FileMetaDataBuilder;
   std::unique_ptr<format::FileCryptoMetaData> metadata_;
@@ -773,6 +808,10 @@ FileCryptoMetaData::~FileCryptoMetaData() {}
 
 void FileCryptoMetaData::WriteTo(::arrow::io::OutputStream* dst) const {
   impl_->WriteTo(dst);
+}
+
+seastar::future<> FileCryptoMetaData::WriteTo(FutureOutputStream* dst) const {
+  return impl_->WriteTo(dst);
 }
 
 std::string FileMetaData::SerializeToString() const {
