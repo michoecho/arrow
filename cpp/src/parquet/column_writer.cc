@@ -2402,8 +2402,8 @@ seastar::future<> ColumnWriterImpl::FlushBufferedDataPages() {
       boost::counting_iterator<size_t>(0),
       boost::counting_iterator<size_t>(data_pages_.size()),
       [this] (size_t i) {
-        return WriteDataPage(data_pages_[i]);
-      });
+      return WriteDataPage(data_pages_[i]);
+    });
   }).then([this] {
     data_pages_.clear();
     total_compressed_bytes_ = 0;
