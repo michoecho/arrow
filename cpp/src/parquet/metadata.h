@@ -232,6 +232,9 @@ class PARQUET_EXPORT FileMetaData {
   void WriteTo(::arrow::io::OutputStream* dst,
                const std::shared_ptr<Encryptor>& encryptor = NULLPTR) const;
 
+  seastar::future<> WriteTo(seastarized::FutureOutputStream* dst,
+               const std::shared_ptr<Encryptor>& encryptor = NULLPTR) const;
+
   /// \brief Return Thrift-serialized representation of the metadata as a
   /// string
   std::string SerializeToString() const;
@@ -270,6 +273,7 @@ class PARQUET_EXPORT FileCryptoMetaData {
   const std::string& key_metadata() const;
 
   void WriteTo(::arrow::io::OutputStream* dst) const;
+  seastar::future<> WriteTo(seastarized::FutureOutputStream* dst) const;
 
  private:
   friend FileMetaDataBuilder;
