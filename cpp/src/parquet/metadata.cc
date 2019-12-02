@@ -564,7 +564,7 @@ class FileMetaData::FileMetaDataImpl {
     if (is_encryption_algorithm_set()) {
       uint8_t* serialized_data;
       uint32_t serialized_len;
-      serializer.SerializeToBuffer(metadata_.get(), &serialized_len, &serialized_data);
+      serializer->SerializeToBuffer(metadata_.get(), &serialized_len, &serialized_data);
 
       // encrypt the footer key
       auto encrypted_data = std::make_shared<std::vector<uint8_t>>(
@@ -579,10 +579,10 @@ class FileMetaData::FileMetaDataImpl {
       }).then([=] {
         return dst->Write(encrypted_data->data() + encrypted_len - encryption::kGcmTagLength,
                      encryption::kGcmTagLength);
-      });
+      }).then([serializer, encrypted_data]{});
     } else {  // either plaintext file (when encryptor is null)
       // or encrypted file with encrypted footer
-      return serializer.Serialize(metadata_.get(), dst, encryptor);
+      return serializer->Serialize(metadata_.get(), dst, encryptor).then([serializer](int64_t){});
     }
   }
 
@@ -752,6 +752,11 @@ void FileMetaData::WriteTo(::arrow::io::OutputStream* dst,
   return impl_->WriteTo(dst, encryptor);
 }
 
+seastar::future<> FileMetaData::WriteTo(seastarized::FutureOutputStream* dst,
+                           const std::shared_ptr<Encryptor>& encryptor) const {
+  return impl_->WriteTo(dst, encryptor);
+}
+
 class FileCryptoMetaData::FileCryptoMetaDataImpl {
  public:
   FileCryptoMetaDataImpl() {}
@@ -773,9 +778,9 @@ class FileCryptoMetaData::FileCryptoMetaDataImpl {
     serializer.Serialize(metadata_.get(), dst);
   }
 
-  seastar::future<> WriteTo(FutureOutputStream* dst) const {
-    auto serializer = std::make_unique<ThriftSerializer>();
-    return serializer.Serialize(metadata_.get(), dst).finally([serializer = std::move(serializer)]);
+  seastar::future<> WriteTo(seastarized::FutureOutputStream* dst) const {
+    auto serializer = std::make_shared<ThriftSerializer>();
+    return serializer->Serialize(metadata_.get(), dst).then([serializer](int64_t){});
   }
 
  private:
@@ -810,7 +815,7 @@ void FileCryptoMetaData::WriteTo(::arrow::io::OutputStream* dst) const {
   impl_->WriteTo(dst);
 }
 
-seastar::future<> FileCryptoMetaData::WriteTo(FutureOutputStream* dst) const {
+seastar::future<> FileCryptoMetaData::WriteTo(seastarized::FutureOutputStream* dst) const {
   return impl_->WriteTo(dst);
 }
 

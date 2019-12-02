@@ -979,40 +979,26 @@ class FileSerializer : public ParquetFileWriter::Contents {
   }
 };
 
-
-#if 0
 // ----------------------------------------------------------------------
 // ParquetFileWriter public API
 
 ParquetFileWriter::ParquetFileWriter() {}
 
-ParquetFileWriter::~ParquetFileWriter() {
-  try {
-    Close();
-  } catch (...) {
-  }
-}
+ParquetFileWriter::~ParquetFileWriter() {}
 
-std::unique_ptr<ParquetFileWriter> ParquetFileWriter::Open(
-    const std::shared_ptr<::arrow::io::OutputStream>& sink,
+seastar::future<std::unique_ptr<ParquetFileWriter>> ParquetFileWriter::Open(
+    const std::shared_ptr<FutureOutputStream>& sink,
     const std::shared_ptr<GroupNode>& schema,
     const std::shared_ptr<WriterProperties>& properties,
     const std::shared_ptr<const KeyValueMetadata>& key_value_metadata) {
-  auto contents = FileSerializer::Open(sink, schema, properties, key_value_metadata);
-  std::unique_ptr<ParquetFileWriter> result(new ParquetFileWriter());
-  result->Open(std::move(contents));
-  return result;
+  return FileSerializer::Open(sink, schema, properties, key_value_metadata).then(
+  [] (std::unique_ptr<ParquetFileWriter::Contents> contents) {  
+    std::unique_ptr<ParquetFileWriter> result(new ParquetFileWriter());
+    result->Open(std::move(contents));
+    return result;
+  });
 }
 
-std::unique_ptr<ParquetFileWriter> ParquetFileWriter::Open(
-    const std::shared_ptr<OutputStream>& sink,
-    const std::shared_ptr<schema::GroupNode>& schema,
-    const std::shared_ptr<WriterProperties>& properties,
-    const std::shared_ptr<const KeyValueMetadata>& key_value_metadata) {
-  return Open(std::make_shared<ParquetOutputWrapper>(sink), schema, properties,
-              key_value_metadata);
-}
-#endif
 seastar::future<> WriteFileMetaData(const FileMetaData& file_metadata, FutureOutputStream* sink) {
   // Write MetaData
   int64_t position = sink->Tell();
@@ -1059,7 +1045,6 @@ seastar::future<> WriteFileCryptoMetaData(const FileCryptoMetaData& crypto_metad
                              FutureOutputStream* sink) {
   return crypto_metadata.WriteTo(sink);
 }
-#if 0
 
 const SchemaDescriptor* ParquetFileWriter::schema() const { return contents_->schema(); }
 
@@ -1086,30 +1071,31 @@ void ParquetFileWriter::Open(std::unique_ptr<ParquetFileWriter::Contents> conten
   contents_ = std::move(contents);
 }
 
-void ParquetFileWriter::Close() {
+seastar::future<> ParquetFileWriter::Close() {
   if (contents_) {
-    contents_->Close();
-    file_metadata_ = contents_->metadata();
-    contents_.reset();
+    return contents_->Close().then([this] {;
+      file_metadata_ = contents_->metadata();
+      contents_.reset();
+    });
   }
+  return seastar::make_ready_future<>();
 }
 
-RowGroupWriter* ParquetFileWriter::AppendRowGroup() {
+seastar::future<RowGroupWriter*> ParquetFileWriter::AppendRowGroup() {
   return contents_->AppendRowGroup();
 }
 
-RowGroupWriter* ParquetFileWriter::AppendBufferedRowGroup() {
+seastar::future<RowGroupWriter*> ParquetFileWriter::AppendBufferedRowGroup() {
   return contents_->AppendBufferedRowGroup();
 }
 
-RowGroupWriter* ParquetFileWriter::AppendRowGroup(int64_t num_rows) {
+seastar::future<RowGroupWriter*> ParquetFileWriter::AppendRowGroup(int64_t num_rows) {
   return AppendRowGroup();
 }
 
 const std::shared_ptr<WriterProperties>& ParquetFileWriter::properties() const {
   return contents_->properties();
 }
-#endif
 
 } // namespace seastarized
 

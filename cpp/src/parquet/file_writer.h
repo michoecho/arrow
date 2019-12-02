@@ -381,7 +381,7 @@ class PARQUET_EXPORT ParquetFileWriter {
   ParquetFileWriter();
   ~ParquetFileWriter();
 
-  static std::unique_ptr<ParquetFileWriter> Open(
+  static seastar::future<std::unique_ptr<ParquetFileWriter>> Open(
       const std::shared_ptr<FutureOutputStream>& sink,
       const std::shared_ptr<schema::GroupNode>& schema,
       const std::shared_ptr<WriterProperties>& properties = default_writer_properties(),
@@ -397,20 +397,20 @@ class PARQUET_EXPORT ParquetFileWriter {
   // @param num_rows The number of rows that are stored in the new RowGroup
   //
   // \deprecated Since 1.3.0
-  RowGroupWriter* AppendRowGroup(int64_t num_rows);
+  seastar::future<RowGroupWriter*> AppendRowGroup(int64_t num_rows);
 
   /// Construct a RowGroupWriter with an arbitrary number of rows.
   ///
   /// Ownership is solely within the ParquetFileWriter. The RowGroupWriter is only valid
   /// until the next call to AppendRowGroup or AppendBufferedRowGroup or Close.
-  RowGroupWriter* AppendRowGroup();
+  seastar::future<RowGroupWriter*> AppendRowGroup();
 
   /// Construct a RowGroupWriter that buffers all the values until the RowGroup is ready.
   /// Use this if you want to write a RowGroup based on a certain size
   ///
   /// Ownership is solely within the ParquetFileWriter. The RowGroupWriter is only valid
   /// until the next call to AppendRowGroup or AppendBufferedRowGroup or Close.
-  RowGroupWriter* AppendBufferedRowGroup();
+  seastar::future<RowGroupWriter*> AppendBufferedRowGroup();
 
   /// Number of columns.
   ///
