@@ -90,6 +90,7 @@ class FutureInputStream {
   virtual seastar::future<int64_t> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) = 0;
   virtual seastar::future<int64_t> Peek(int64_t nbytes, std::string_view *out) = 0;
   virtual seastar::future<> Close() = 0;
+  virtual seastar::future<> Advance(int64_t nbytes) = 0;
   virtual int64_t Tell() = 0;
 };
 
@@ -106,7 +107,7 @@ class FileFutureInputStream : public FutureInputStream {
       : input_(std::move(input)) {}
 
   seastar::future<int64_t> Read(int64_t nbytes, void *out) {
-    if (buffer.size() < (unit64_t) nbytes) {
+    if (buffer.size() < (uint64_t) nbytes) {
       buffer.resize(nbytes);
     }
 
@@ -153,6 +154,18 @@ class FileFutureInputStream : public FutureInputStream {
 
   seastar::future<> Close() override {
     return input_.close();
+  }
+
+  seastar::future<> Advance(int64_t nbytes) override {
+    if (nbytes >= buffered_bytes){
+      nbytes -= buffered_bytes;
+      buffered_bytes = 0;
+      return input_.skip(nbytes);
+    } else{
+      memmove(buffer.data(), buffer.data() + buffered_bytes, buffered_bytes - nbytes);
+      buffered_bytes -= nbytes;
+      return seastar::make_ready_future<>();
+    }
   }
 
   int64_t Tell() override {
