@@ -384,53 +384,8 @@ using ByteArrayReader = TypedColumnReader<ByteArrayType>;
 using FixedLenByteArrayReader = TypedColumnReader<FLBAType>;
 
 namespace seastarized{
-
-class Decryptor;
-class Page;
-
-// 16 MB is the default maximum page header size
-static constexpr uint32_t kDefaultMaxPageHeaderSize = 16 * 1024 * 1024;
-
-// 16 KB is the default expected page header size
-static constexpr uint32_t kDefaultPageHeaderSize = 16 * 1024;
-
-class PARQUET_EXPORT LevelDecoder {
- public:
-  LevelDecoder();
-  ~LevelDecoder();
-#if 0
-  // Initialize the LevelDecoder state with new data
-  // and return the number of bytes consumed
-  int SetData(Encoding::type encoding, int16_t max_level, int num_buffered_values,
-              const uint8_t* data);
-
-  // Decodes a batch of levels into an array and returns the number of levels decoded
-  int Decode(int batch_size, int16_t* levels);
-#endif
- private:
-  int bit_width_;
-  int num_values_remaining_;
-  Encoding::type encoding_;
-  std::unique_ptr<::arrow::util::RleDecoder> rle_decoder_;
-  std::unique_ptr<::arrow::BitUtil::BitReader> bit_packed_decoder_;
-};
-
-struct CryptoContext {
-  CryptoContext(bool start_with_dictionary_page, int16_t rg_ordinal, int16_t col_ordinal,
-                std::shared_ptr<Decryptor> meta, std::shared_ptr<Decryptor> data)
-      : start_decrypt_with_dictionary_page(start_with_dictionary_page),
-        row_group_ordinal(rg_ordinal),
-        column_ordinal(col_ordinal),
-        meta_decryptor(meta),
-        data_decryptor(data) {}
-  CryptoContext() {}
-
-  bool start_decrypt_with_dictionary_page = false;
-  int16_t row_group_ordinal = -1;
-  int16_t column_ordinal = -1;
-  std::shared_ptr<Decryptor> meta_decryptor;
-  std::shared_ptr<Decryptor> data_decryptor;
-};
+// todo: is it needed?
+//class Decryptor;
 
 // Abstract page iterator interface. This way, we can feed column pages to the
 // ColumnReader through whatever mechanism we choose
@@ -660,46 +615,6 @@ class DictionaryRecordReader : virtual public RecordReader {
 #endif
 };
 
-#if 0
-static inline void DefinitionLevelsToBitmap(
-    const int16_t* def_levels, int64_t num_def_levels, const int16_t max_definition_level,
-    const int16_t max_repetition_level, int64_t* values_read, int64_t* null_count,
-    uint8_t* valid_bits, int64_t valid_bits_offset) {
-  // We assume here that valid_bits is large enough to accommodate the
-  // additional definition levels and the ones that have already been written
-  ::arrow::internal::BitmapWriter valid_bits_writer(valid_bits, valid_bits_offset,
-                                                    num_def_levels);
-
-  // TODO(itaiin): As an interim solution we are splitting the code path here
-  // between repeated+flat column reads, and non-repeated+nested reads.
-  // Those paths need to be merged in the future
-  for (int i = 0; i < num_def_levels; ++i) {
-    if (def_levels[i] == max_definition_level) {
-      valid_bits_writer.Set();
-    } else if (max_repetition_level > 0) {
-      // repetition+flat case
-      if (def_levels[i] == (max_definition_level - 1)) {
-        valid_bits_writer.Clear();
-        *null_count += 1;
-      } else {
-        continue;
-      }
-    } else {
-      // non-repeated+nested case
-      if (def_levels[i] < max_definition_level) {
-        valid_bits_writer.Clear();
-        *null_count += 1;
-      } else {
-        throw ParquetException("definition level exceeds maximum");
-      }
-    }
-
-    valid_bits_writer.Next();
-  }
-  valid_bits_writer.Finish();
-  *values_read = valid_bits_writer.position();
-}
-#endif
 }  // namespace internal
 
 }  // namespace seastarized
