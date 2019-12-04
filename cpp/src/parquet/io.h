@@ -1,5 +1,7 @@
 #pragma once
 #include <seastar/core/fstream.hh>
+#include <vector>
+#include <string_view>
 #include "arrow/util/memory.h"
 
 namespace parquet::seastarized {
@@ -78,6 +80,96 @@ class MemoryFutureOutputStream : public FutureOutputStream {
 
   ::arrow::Status Finish(std::shared_ptr<Buffer>* result) {
     return sink_->Finish(result);
+  }
+};
+
+class FutureInputStream {
+ public:
+  virtual ~FutureInputStream() = default;
+  virtual seastar::future<int64_t> Read(int64_t nbytes, void *out) = 0;
+  virtual seastar::future<int64_t> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) = 0;
+  virtual seastar::future<int64_t> Peek(int64_t nbytes, std::string_view *out) = 0;
+  virtual seastar::future<> Close() = 0;
+  virtual seastar::future<> Advance(int64_t nbytes) = 0;
+  virtual int64_t Tell() = 0;
+};
+
+//todo: avoid copying
+class FileFutureInputStream : public FutureInputStream {
+ private:
+  seastar::input_stream<char> input_;
+  std::vector<char> buffer;
+  int64_t pos = 0;
+  int64_t buffered_bytes = 0;
+
+ public:
+  FileFutureInputStream(seastar::input_stream<char> &&input)
+      : input_(std::move(input)) {}
+
+  seastar::future<int64_t> Read(int64_t nbytes, void *out) {
+    if (buffer.size() < (uint64_t) nbytes) {
+      buffer.resize(nbytes);
+    }
+
+    if (buffered_bytes >= nbytes) {
+      pos += nbytes;
+      memcpy(out, buffer.data(), nbytes);
+      memmove(buffer.data(), buffer.data() + buffered_bytes, buffered_bytes - nbytes);
+      buffered_bytes -= nbytes;
+      return seastar::make_ready_future<int64_t>(nbytes);
+    }
+
+    return input_.read_up_to(nbytes - buffered_bytes).then([=](seastar::temporary_buffer<char> buf) {
+      memcpy(buffer.data() + buffered_bytes, buf.get(), buf.size());
+      int64_t read_bytes = buffered_bytes + buf.size();
+      memcpy(out, buffer.data(), read_bytes);
+      pos += read_bytes;
+      buffered_bytes = 0;
+      return seastar::make_ready_future<int64_t>(read_bytes);
+    });
+  }
+
+  seastar::future<int64_t> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) {
+    PARQUET_THROW_NOT_OK(::arrow::AllocateBuffer(nbytes, out));
+    return Read(nbytes, out->get()->mutable_data());
+  }
+
+  seastar::future<int64_t> Peek(int64_t nbytes, std::string_view *out) {
+    if (buffer.size() < (uint64_t) nbytes) {
+      buffer.resize(nbytes);
+    }
+
+    if (buffered_bytes >= nbytes) {
+      *out = std::string_view(buffer.data(), nbytes);
+      return seastar::make_ready_future<int64_t>(nbytes);
+    }
+
+    return input_.read_up_to(nbytes - buffered_bytes).then([=](seastar::temporary_buffer<char> buf) {
+      memcpy(buffer.data() + buffered_bytes, buf.get(), buf.size());
+      buffered_bytes += buf.size();
+      *out = std::string_view(buffer.data(), buffered_bytes);
+      return seastar::make_ready_future<int64_t>(buffered_bytes);
+    });
+  }
+
+  seastar::future<> Close() override {
+    return input_.close();
+  }
+
+  seastar::future<> Advance(int64_t nbytes) override {
+    if (nbytes >= buffered_bytes){
+      nbytes -= buffered_bytes;
+      buffered_bytes = 0;
+      return input_.skip(nbytes);
+    } else{
+      memmove(buffer.data(), buffer.data() + buffered_bytes, buffered_bytes - nbytes);
+      buffered_bytes -= nbytes;
+      return seastar::make_ready_future<>();
+    }
+  }
+
+  int64_t Tell() override {
+    return pos;
   }
 };
 
