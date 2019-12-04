@@ -81,4 +81,49 @@ class MemoryFutureOutputStream : public FutureOutputStream {
   }
 };
 
+class FutureInputStream {
+ public:
+  virtual ~FutureInputStream() = default;
+  virtual seastar::future<> Read(int64_t nbytes, int64_t *bytes_read, void *out) = 0;
+  virtual seastar::future<> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) = 0;
+  virtual seastar::future<> Close() = 0;
+  virtual int64_t Tell() = 0;
+};
+
+class FileFutureInputStream : public FutureInputStream {
+  seastar::input_stream<char> input_;
+  int64_t pos = 0;
+
+ public:
+  FileFutureInputStream(seastar::input_stream<char> &&input)
+      : input_(std::move(input)) {}
+
+  seastar::future<> Read(int64_t nbytes, int64_t *bytes_read, void *out) {
+    return input_.read_up_to(nbytes).then([=](seastar::temporary_buffer<char> buf) {
+      memcpy(out, buf.get(), buf.size());
+      *bytes_read = buf.size();
+      pos += buf.size();
+      return seastar::make_ready_future<>();
+    });
+  }
+
+  //todo avoid copying
+  seastar::future<> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) {
+    return input_.read_up_to(nbytes).then([=](seastar::temporary_buffer<char> buf) {
+      PARQUET_THROW_NOT_OK(::arrow::AllocateBuffer(buf.size(), out));
+      memcpy(out->get()->mutable_data(), buf.get(), buf.size());
+      pos += buf.size();
+      return seastar::make_ready_future<>();
+    });
+  }
+
+  seastar::future<> Close() override {
+    return input_.close();
+  }
+
+  int64_t Tell() override {
+    return pos;
+  }
+};
+
 } // namespace parquet::seastarized
