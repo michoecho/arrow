@@ -1470,4 +1470,106 @@ std::shared_ptr<RecordReader> RecordReader::Make(const ColumnDescriptor* descr,
 }
 
 }  // namespace internal
+namespace seastarized {
+#if 0
+LevelDecoder::LevelDecoder() : num_values_remaining_(0) {}
+
+LevelDecoder::~LevelDecoder() {}
+
+int LevelDecoder::SetData(Encoding::type encoding, int16_t max_level,
+                          int num_buffered_values, const uint8_t* data) {
+  int32_t num_bytes = 0;
+  encoding_ = encoding;
+  num_values_remaining_ = num_buffered_values;
+  bit_width_ = BitUtil::Log2(max_level + 1);
+  switch (encoding) {
+    case Encoding::RLE: {
+      num_bytes = arrow::util::SafeLoadAs<int32_t>(data);
+      const uint8_t* decoder_data = data + sizeof(int32_t);
+      if (!rle_decoder_) {
+        rle_decoder_.reset(
+            new ::arrow::util::RleDecoder(decoder_data, num_bytes, bit_width_));
+      } else {
+        rle_decoder_->Reset(decoder_data, num_bytes, bit_width_);
+      }
+      return static_cast<int>(sizeof(int32_t)) + num_bytes;
+    }
+    case Encoding::BIT_PACKED: {
+      num_bytes =
+          static_cast<int32_t>(BitUtil::BytesForBits(num_buffered_values * bit_width_));
+      if (!bit_packed_decoder_) {
+        bit_packed_decoder_.reset(new ::arrow::BitUtil::BitReader(data, num_bytes));
+      } else {
+        bit_packed_decoder_->Reset(data, num_bytes);
+      }
+      return num_bytes;
+    }
+    default:
+      throw ParquetException("Unknown encoding type for levels.");
+  }
+  return -1;
+}
+
+int LevelDecoder::Decode(int batch_size, int16_t* levels) {
+  int num_decoded = 0;
+
+  int num_values = std::min(num_values_remaining_, batch_size);
+  if (encoding_ == Encoding::RLE) {
+    num_decoded = rle_decoder_->GetBatch(levels, num_values);
+  } else {
+    num_decoded = bit_packed_decoder_->GetBatch(bit_width_, levels, num_values);
+  }
+  num_values_remaining_ -= num_decoded;
+  return num_decoded;
+}
+
+ReaderProperties default_reader_properties() {
+  static ReaderProperties default_reader_properties;
+  return default_reader_properties;
+}
+
+// ----------------------------------------------------------------------
+// SerializedPageReader deserializes Thrift metadata and pages that have been
+// assembled in a serialized stream for storing in a Parquet files
+
+static constexpr int16_t kNonPageOrdinal = static_cast<int16_t>(-1);
+
+// This subclass delimits pages appearing in a serialized stream, each preceded
+// by a serialized Thrift format::PageHeader indicating the type of each page
+// and the page metadata.
+class SerializedPageReader : public PageReader {
+ public:
+  SerializedPageReader(const std::shared_ptr<ArrowInputStream>& stream,
+                       int64_t total_num_rows, Compression::type codec,
+                       ::arrow::MemoryPool* pool, const CryptoContext* crypto_ctx)
+      : stream_(stream),
+        decompression_buffer_(AllocateBuffer(pool, 0)),
+        page_ordinal_(0),
+        seen_num_rows_(0),
+        total_num_rows_(total_num_rows),
+        decryption_buffer_(AllocateBuffer(pool, 0)) {
+    if (crypto_ctx != nullptr) {
+      crypto_ctx_ = *crypto_ctx;
+      InitDecryption();
+    }
+    max_page_header_size_ = kDefaultMaxPageHeaderSize;
+    decompressor_ = GetCodec(codec);
+  }
+
+  // Implement the PageReader interface
+  std::shared_ptr<Page> NextPage() override;
+
+  void set_max_page_header_size(uint32_t size) override { max_page_header_size_ = size; }
+
+ private:
+  void UpdateDecryption(const std::shared_ptr<Decryptor>& decryptor, int8_t module_type,
+                        const std::string& page_aad);
+
+  void InitDecryption();
+
+  std::shared_ptr<ArrowInputStream> stream_;
+
+  format::PageHeader current_page_header_;
+#endif
+}  // namespace seastarized
 }  // namespace parquet
