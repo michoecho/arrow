@@ -602,7 +602,6 @@ int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_si
 }
 
 namespace seastarized{
-#if 0
 // PARQUET-978: Minimize footer reads by reading 64 KB from the end of the file
 static constexpr int64_t kDefaultFooterReadSize = 64 * 1024;
 static constexpr uint32_t kFooterSize = 8;
@@ -612,10 +611,9 @@ static constexpr int64_t kMaxDictHeaderSize = 100;
 
 // ----------------------------------------------------------------------
 // RowGroupReader public API
-
+#if 0
 RowGroupReader::RowGroupReader(std::unique_ptr<Contents> contents)
         : contents_(std::move(contents)) {}
-
 std::shared_ptr<ColumnReader> RowGroupReader::Column(int i) {
     DCHECK(i < metadata()->num_columns())
             << "The RowGroup only has " << metadata()->num_columns()
@@ -637,6 +635,7 @@ std::unique_ptr<PageReader> RowGroupReader::GetColumnPageReader(int i) {
 
 // Returns the rowgroup metadata
 const RowGroupMetaData* RowGroupReader::metadata() const { return contents_->metadata(); }
+#endif
 
 // RowGroupReader::Contents implementation for the Parquet file specification
 class SerializedRowGroup : public RowGroupReader::Contents {
@@ -652,7 +651,7 @@ public:
               file_decryptor_(file_decryptor) {
         row_group_metadata_ = file_metadata->RowGroup(row_group_number);
     }
-
+#if 0
     const RowGroupMetaData* metadata() const override { return row_group_metadata_.get(); }
 
     const ReaderProperties* properties() const override { return &properties_; }
@@ -720,7 +719,7 @@ public:
         return PageReader::Open(stream, col->num_values(), col->compression(),
                                 properties_.memory_pool(), &ctx);
     }
-
+#endif
 private:
     std::shared_ptr<ArrowInputFile> source_;
     FileMetaData* file_metadata_;
@@ -738,6 +737,7 @@ private:
 // This class takes ownership of the provided data source
 class SerializedFile : public ParquetFileReader::Contents {
 public:
+#if 0
     SerializedFile(const std::shared_ptr<ArrowInputFile>& source,
                    const ReaderProperties& props = default_reader_properties())
             : source_(source), properties_(props) {}
@@ -818,14 +818,14 @@ public:
                     file_decryption_properties, metadata_buffer, metadata_len, read_metadata_len);
         }
     }
-
+#endif
 private:
     std::shared_ptr<ArrowInputFile> source_;
     std::shared_ptr<FileMetaData> file_metadata_;
     ReaderProperties properties_;
 
     std::unique_ptr<InternalFileDecryptor> file_decryptor_;
-
+#if 0
     void ParseUnencryptedFileMetadata(const std::shared_ptr<Buffer>& footer_buffer,
                                       int64_t footer_read_size, int64_t file_size,
                                       std::shared_ptr<Buffer>* metadata_buffer,
@@ -842,8 +842,10 @@ private:
     void ParseMetaDataOfEncryptedFileWithEncryptedFooter(
             const std::shared_ptr<Buffer>& footer_buffer, int64_t footer_read_size,
             int64_t file_size);
+#endif
 };
 
+#if 0
 void SerializedFile::ParseUnencryptedFileMetadata(
         const std::shared_ptr<Buffer>& footer_buffer, int64_t footer_read_size,
         int64_t file_size, std::shared_ptr<Buffer>* metadata_buffer, uint32_t* metadata_len,
@@ -1005,10 +1007,10 @@ std::string SerializedFile::HandleAadPrefix(
     }
     return aad_prefix + algo.aad.aad_file_unique;
 }
-
+#endif
 // ----------------------------------------------------------------------
 // ParquetFileReader public API
-
+#if 0
 ParquetFileReader::ParquetFileReader() {}
 
 ParquetFileReader::~ParquetFileReader() {
@@ -1094,18 +1096,14 @@ std::shared_ptr<RowGroupReader> ParquetFileReader::RowGroup(int i) {
 
     return contents_->GetRowGroup(i);
 }
-
 // ----------------------------------------------------------------------
 // File metadata helpers
-
 std::shared_ptr<FileMetaData> ReadMetaData(
         const std::shared_ptr<::arrow::io::RandomAccessFile>& source) {
     return ParquetFileReader::Open(source)->metadata();
 }
-
 // ----------------------------------------------------------------------
 // File scanner for performance testing
-
 int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
                          ParquetFileReader* reader) {
     std::vector<int16_t> rep_levels(column_batch_size);

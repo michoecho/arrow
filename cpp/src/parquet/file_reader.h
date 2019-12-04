@@ -140,38 +140,37 @@ int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_si
                          ParquetFileReader* reader);
 
 namespace seastarized {
-#if 0
 class ColumnReader;
-class FileMetaData;
 class PageReader;
 class RandomAccessSource;
-class RowGroupMetaData;
-class PARQUET_EXPORT RowGroupReader {
-        public:
-        // Forward declare a virtual class 'Contents' to aid dependency injection and more
-        // easily create test fixtures
-        // An implementation of the Contents class is defined in the .cc file
-        struct Contents {
-            virtual ~Contents() {}
-            virtual std::unique_ptr<PageReader> GetColumnPageReader(int i) = 0;
-            virtual const RowGroupMetaData* metadata() const = 0;
-            virtual const ReaderProperties* properties() const = 0;
-        };
+class PARQUET_EXPORT RowGroupReader{
+    public:
+    // Forward declare a virtual class 'Contents' to aid dependency injection and more
+    // easily create test fixtures
+    // An implementation of the Contents class is defined in the .cc file
+    struct Contents {
+#if 0
+      virtual ~Contents() {}
+      virtual std::unique_ptr<PageReader> GetColumnPageReader(int i) = 0;
+      virtual const RowGroupMetaData* metadata() const = 0;
+      virtual const ReaderProperties* properties() const = 0;
+#endif
+    };
+#if 0
+    explicit RowGroupReader(std::unique_ptr<Contents> contents);
 
-        explicit RowGroupReader(std::unique_ptr<Contents> contents);
+    // Returns the rowgroup metadata
+    const RowGroupMetaData* metadata() const;
 
-        // Returns the rowgroup metadata
-        const RowGroupMetaData* metadata() const;
+    // Construct a ColumnReader for the indicated row group-relative
+    // column. Ownership is shared with the RowGroupReader.
+    std::shared_ptr<ColumnReader> Column(int i);
 
-        // Construct a ColumnReader for the indicated row group-relative
-        // column. Ownership is shared with the RowGroupReader.
-        std::shared_ptr<ColumnReader> Column(int i);
-
-        std::unique_ptr<PageReader> GetColumnPageReader(int i);
-
-        private:
-        // Holds a pointer to an instance of Contents implementation
-        std::unique_ptr<Contents> contents_;
+    std::unique_ptr<PageReader> GetColumnPageReader(int i);
+#endif
+    private:
+    // Holds a pointer to an instance of Contents implementation
+    std::unique_ptr<Contents> contents_;
 };
 
 class PARQUET_EXPORT ParquetFileReader {
@@ -180,6 +179,7 @@ class PARQUET_EXPORT ParquetFileReader {
         // easily create test fixtures
         // An implementation of the Contents class is defined in the .cc file
         struct PARQUET_EXPORT Contents {
+#if 0
             static std::unique_ptr<Contents> Open(
                     const std::shared_ptr<::arrow::io::RandomAccessFile>& source,
                     const ReaderProperties& props = default_reader_properties(),
@@ -190,11 +190,11 @@ class PARQUET_EXPORT ParquetFileReader {
             virtual void Close() = 0;
             virtual std::shared_ptr<RowGroupReader> GetRowGroup(int i) = 0;
             virtual std::shared_ptr<FileMetaData> metadata() const = 0;
+#endif
         };
-
+#if 0
         ParquetFileReader();
         ~ParquetFileReader();
-
         // Create a reader from some implementation of parquet-cpp's generic file
         // input interface
         //
@@ -228,12 +228,13 @@ class PARQUET_EXPORT ParquetFileReader {
 
         // Returns the file metadata. Only one instance is ever created
         std::shared_ptr<FileMetaData> metadata() const;
-
+#endif
         private:
         // Holds a pointer to an instance of Contents implementation
         std::unique_ptr<Contents> contents_;
 };
 
+#if 0
 // Read only Parquet file metadata
 std::shared_ptr<FileMetaData> PARQUET_EXPORT
 ReadMetaData(const std::shared_ptr<::arrow::io::RandomAccessFile>& source);
@@ -246,9 +247,7 @@ ReadMetaData(const std::shared_ptr<::arrow::io::RandomAccessFile>& source);
 PARQUET_EXPORT
         int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
         ParquetFileReader* reader);
-
 #endif
-
 }  // namepsace seatarized
 
 }  // namespace parquet
