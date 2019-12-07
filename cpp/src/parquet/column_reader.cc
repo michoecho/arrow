@@ -1597,301 +1597,161 @@ seastar::future<std::shared_ptr<Page>> SerializedPageReader::NextPage() {
   // Loop here because there may be unhandled page types that we skip until
   // finding a page that we do know what to do with
   return seastar::do_with(std::move(break_loops), std::move(header_size), std::move(allowed_page_size),
-                          std::move(buffer), std::move(page_buffer), std::move(retval),
-                          [this](auto &break_loops, auto &header_size, auto &allowed_page_size, auto &buffer, auto &page_buffer, auto &retval) {
-                            return seastar::do_until(
-                                [&retval, &break_loops, this] {
-                                  return !break_loops && retval.get() == nullptr && seen_num_rows_ < total_num_rows_;
-                                },
-                                [&, this] {
-                                  header_size = 0;
-                                  allowed_page_size = kDefaultPageHeaderSize;
-                                  return seastar::do_until(
-                                      [&break_loops, &retval] {
-                                        return !break_loops && retval.get() == nullptr;
-                                      },
-                                      [&, this] {
-                                        return stream_->Peek(allowed_page_size, &buffer).then(
-                                            [&, this](int64_t read_bytes) {
-                                              if (read_bytes == 0) {
-                                                break_loops = true;
-                                                return seastar::make_ready_future<>();
-                                              }
-                                              header_size = static_cast<uint32_t>(read_bytes);
-                                              try {
-                                                if (crypto_ctx_.meta_decryptor != nullptr) {
-                                                  UpdateDecryption(crypto_ctx_.meta_decryptor, encryption::kDictionaryPageHeader,
-                                                                   data_page_header_aad_);
-                                                }
-                                                DeserializeThriftMsg(reinterpret_cast<const uint8_t *>(buffer.data()),
-                                                                     &header_size, &current_page_header_,
-                                                                     crypto_ctx_.meta_decryptor);
-                                                return seastar::make_ready_future<>();
-                                              } catch (std::exception &e) {
-                                                // Failed to deserialize. Double the allowed page header size and try again
-                                                std::stringstream ss;
-                                                ss << e.what();
-                                                allowed_page_size *= 2;
-                                                if (allowed_page_size > max_page_header_size_) {
-                                                  ss << "Deserializing page header failed.\n";
-                                                  // todo: is it propagated back to do_until's return value?
-                                                  return seastar::make_exception_future<>(ParquetException(ss.str()));
-                                                }
-                                                return seastar::make_ready_future<>();
-                                              }
-                                            }
-                                        );
-                                      }
-                                  ).then(
-                                      [&, this] {
-                                        return stream_->Advance(header_size).then(
-                                            [&, this] {
-                                              int compressed_len = current_page_header_.compressed_page_size;
-                                              int uncompressed_len = current_page_header_.uncompressed_page_size;
-                                              if (crypto_ctx_.data_decryptor != nullptr) {
-                                                UpdateDecryption(crypto_ctx_.data_decryptor, encryption::kDictionaryPage,
-                                                                 data_page_aad_);
-                                              }
-                                              // Read the compressed data page.
-                                              std::shared_ptr<Buffer> page_buffer;
-                                              return stream_->Read(compressed_len, &page_buffer).then(
-                                                  [&, this, compressed_len, uncompressed_len, page_buffer] (int64_t read_bytes) mutable {
-                                                    if (page_buffer->size() != compressed_len) {
-                                                      std::stringstream ss;
-                                                      ss << "Page was smaller (" << page_buffer->size() << ") than expected ("
-                                                         << compressed_len << ")";
-                                                      ParquetException::EofException(ss.str());
-                                                    }
-                                                    // Decrypt it if we need to
-                                                    if (crypto_ctx_.data_decryptor != nullptr) {
-                                                      PARQUET_THROW_NOT_OK(decryption_buffer_->Resize(
-                                                          compressed_len - crypto_ctx_.data_decryptor->CiphertextSizeDelta()));
-                                                      compressed_len = crypto_ctx_.data_decryptor->Decrypt(
-                                                          page_buffer->data(), compressed_len, decryption_buffer_->mutable_data());
-
-                                                      page_buffer = decryption_buffer_;
-                                                    }
-                                                    // Uncompress it if we need to
-                                                    if (decompressor_ != nullptr) {
-                                                      // Grow the uncompressed buffer if we need to.
-                                                      if (uncompressed_len > static_cast<int>(decompression_buffer_->size())) {
-                                                        PARQUET_THROW_NOT_OK(decompression_buffer_->Resize(uncompressed_len, false));
-                                                      }
-                                                      PARQUET_THROW_NOT_OK(
-                                                          decompressor_->Decompress(compressed_len, page_buffer->data(), uncompressed_len,
-                                                                                    decompression_buffer_->mutable_data()));
-                                                      page_buffer = decompression_buffer_;
-                                                    }
-                                                    if (current_page_header_.type == format::PageType::DICTIONARY_PAGE) {
-                                                      crypto_ctx_.start_decrypt_with_dictionary_page = false;
-                                                      const format::DictionaryPageHeader &dict_header =
-                                                          current_page_header_.dictionary_page_header;
-
-                                                      bool is_sorted = dict_header.__isset.is_sorted ? dict_header.is_sorted : false;
-
-                                                      retval = std::make_shared<DictionaryPage>(page_buffer, dict_header.num_values,
-                                                                                                FromThrift(dict_header.encoding),
-                                                                                                is_sorted);
-                                                      return seastar::make_ready_future<>();
-                                                    } else if (current_page_header_.type == format::PageType::DATA_PAGE) {
-                                                      ++page_ordinal_;
-                                                      const format::DataPageHeader &header = current_page_header_.data_page_header;
-
-                                                      EncodedStatistics page_statistics;
-                                                      if (header.__isset.statistics) {
-                                                        const format::Statistics &stats = header.statistics;
-                                                        if (stats.__isset.max) {
-                                                          page_statistics.set_max(stats.max);
-                                                        }
-                                                        if (stats.__isset.min) {
-                                                          page_statistics.set_min(stats.min);
-                                                        }
-                                                        if (stats.__isset.null_count) {
-                                                          page_statistics.set_null_count(stats.null_count);
-                                                        }
-                                                        if (stats.__isset.distinct_count) {
-                                                          page_statistics.set_distinct_count(stats.distinct_count);
-                                                        }
-                                                      }
-
-                                                      seen_num_rows_ += header.num_values;
-
-                                                      retval = std::make_shared<DataPageV1>(
-                                                          page_buffer, header.num_values, FromThrift(header.encoding),
-                                                          FromThrift(header.definition_level_encoding),
-                                                          FromThrift(header.repetition_level_encoding), page_statistics);
-                                                      return seastar::make_ready_future<>();
-                                                    } else if (current_page_header_.type == format::PageType::DATA_PAGE_V2) {
-                                                      ++page_ordinal_;
-                                                      const format::DataPageHeaderV2 &header = current_page_header_.data_page_header_v2;
-                                                      bool is_compressed = header.__isset.is_compressed ? header.is_compressed : false;
-
-                                                      seen_num_rows_ += header.num_values;
-
-                                                      retval = std::make_shared<DataPageV2>(
-                                                          page_buffer, header.num_values, header.num_nulls, header.num_rows,
-                                                          FromThrift(header.encoding), header.definition_levels_byte_length,
-                                                          header.repetition_levels_byte_length, is_compressed);
-                                                      return seastar::make_ready_future<>();
-                                                    } else {
-                                                      // We don't know what this page type is. We're allowed to skip non-data
-                                                      // pages.
-                                                      return seastar::make_ready_future<>();
-                                                    }
-                                                  }
-                                              );
-                                            }
-                                        );
-                                      }
-                                  );
-                                }
-                            ).then(
-                                [retval] {
-                                  return seastar::make_ready_future < std::shared_ptr < Page >> (retval);
-                                }
-                            );
+      std::move(buffer), std::move(page_buffer), std::move(retval),
+      [this](auto &break_loops, auto &header_size, auto &allowed_page_size, auto &buffer, auto &page_buffer, auto &retval) {
+        return seastar::do_until(
+          [&retval, &break_loops, this] {
+            return !break_loops && retval.get() == nullptr && seen_num_rows_ < total_num_rows_;
+            },
+            [&, this] {
+              header_size = 0;
+              allowed_page_size = kDefaultPageHeaderSize;
+              return seastar::do_until(
+                [&break_loops, &retval] {
+                  return !break_loops && retval.get() == nullptr;
+                  },
+                  [&, this] {
+                    return stream_->Peek(allowed_page_size, &buffer).then(
+                      [&, this](int64_t read_bytes) {
+                        if (read_bytes == 0) {
+                          break_loops = true;
+                          return seastar::make_ready_future<>();
+                        }
+                        header_size = static_cast<uint32_t>(read_bytes);
+                        try {
+                          if (crypto_ctx_.meta_decryptor != nullptr) {
+                            UpdateDecryption(crypto_ctx_.meta_decryptor, encryption::kDictionaryPageHeader,
+                                data_page_header_aad_);
                           }
+                          DeserializeThriftMsg(reinterpret_cast<const uint8_t *>(buffer.data()),
+                              &header_size, &current_page_header_,
+                              crypto_ctx_.meta_decryptor);
+                          return seastar::make_ready_future<>();
+                        } catch (std::exception &e) {
+                          // Failed to deserialize. Double the allowed page header size and try again
+                          std::stringstream ss;
+                          ss << e.what();
+                          allowed_page_size *= 2;
+                          if (allowed_page_size > max_page_header_size_) {
+                            ss << "Deserializing page header failed.\n";
+                            // todo: is it propagated back to do_until's return value?
+                            return seastar::make_exception_future<>(ParquetException(ss.str()));
+                          }
+                          return seastar::make_ready_future<>();
+                        }
+                      }
+                    );
+                  }
+                ).then(
+                  [&, this] {
+                    return stream_->Advance(header_size).then(
+                      [&, this] {
+                        int compressed_len = current_page_header_.compressed_page_size;
+                        int uncompressed_len = current_page_header_.uncompressed_page_size;
+                        if (crypto_ctx_.data_decryptor != nullptr) {
+                          UpdateDecryption(crypto_ctx_.data_decryptor, encryption::kDictionaryPage,
+                              data_page_aad_);
+                        }
+                        // Read the compressed data page.
+                        std::shared_ptr<Buffer> page_buffer;
+                        return stream_->Read(compressed_len, &page_buffer).then(
+                          [&, this, compressed_len, uncompressed_len, page_buffer] (int64_t read_bytes) mutable {
+                            if (page_buffer->size() != compressed_len) {
+                              std::stringstream ss;
+                              ss << "Page was smaller (" << page_buffer->size() << ") than expected ("
+                              << compressed_len << ")";
+                              ParquetException::EofException(ss.str());
+                            }
+                            // Decrypt it if we need to
+                            if (crypto_ctx_.data_decryptor != nullptr) {
+                              PARQUET_THROW_NOT_OK(decryption_buffer_->Resize(
+                                  compressed_len - crypto_ctx_.data_decryptor->CiphertextSizeDelta()));
+                              compressed_len = crypto_ctx_.data_decryptor->Decrypt(
+                                  page_buffer->data(), compressed_len, decryption_buffer_->mutable_data());
+
+                              page_buffer = decryption_buffer_;
+                            }
+                            // Uncompress it if we need to
+                            if (decompressor_ != nullptr) {
+                              // Grow the uncompressed buffer if we need to.
+                              if (uncompressed_len > static_cast<int>(decompression_buffer_->size())) {
+                                PARQUET_THROW_NOT_OK(decompression_buffer_->Resize(uncompressed_len, false));
+                              }
+                              PARQUET_THROW_NOT_OK(
+                                decompressor_->Decompress(compressed_len, page_buffer->data(), uncompressed_len,
+                                    decompression_buffer_->mutable_data()));
+                              page_buffer = decompression_buffer_;
+                            }
+                            if (current_page_header_.type == format::PageType::DICTIONARY_PAGE) {
+                              crypto_ctx_.start_decrypt_with_dictionary_page = false;
+                              const format::DictionaryPageHeader &dict_header =
+                                current_page_header_.dictionary_page_header;
+
+                              bool is_sorted = dict_header.__isset.is_sorted ? dict_header.is_sorted : false;
+
+                              retval = std::make_shared<DictionaryPage>(page_buffer, dict_header.num_values,
+                                  FromThrift(dict_header.encoding),
+                                  is_sorted);
+                              return seastar::make_ready_future<>();
+                            } else if (current_page_header_.type == format::PageType::DATA_PAGE) {
+                              ++page_ordinal_;
+                              const format::DataPageHeader &header = current_page_header_.data_page_header;
+
+                              EncodedStatistics page_statistics;
+                              if (header.__isset.statistics) {
+                                const format::Statistics &stats = header.statistics;
+                                if (stats.__isset.max) {
+                                  page_statistics.set_max(stats.max);
+                                }
+                                if (stats.__isset.min) {
+                                  page_statistics.set_min(stats.min);
+                                }
+                                if (stats.__isset.null_count) {
+                                  page_statistics.set_null_count(stats.null_count);
+                                }
+                                if (stats.__isset.distinct_count) {
+                                  page_statistics.set_distinct_count(stats.distinct_count);
+                                }
+                              }
+
+                              seen_num_rows_ += header.num_values;
+                               retval = std::make_shared<DataPageV1>(
+                                 page_buffer, header.num_values, FromThrift(header.encoding),
+                                 FromThrift(header.definition_level_encoding),
+                                 FromThrift(header.repetition_level_encoding), page_statistics);
+                               return seastar::make_ready_future<>();
+                            } else if (current_page_header_.type == format::PageType::DATA_PAGE_V2) {
+                              ++page_ordinal_;
+                              const format::DataPageHeaderV2 &header = current_page_header_.data_page_header_v2;
+                              bool is_compressed = header.__isset.is_compressed ? header.is_compressed : false;
+
+                              seen_num_rows_ += header.num_values;
+
+                              retval = std::make_shared<DataPageV2>(
+                                page_buffer, header.num_values, header.num_nulls, header.num_rows,
+                                FromThrift(header.encoding), header.definition_levels_byte_length,
+                                header.repetition_levels_byte_length, is_compressed);
+                              return seastar::make_ready_future<>();
+                            } else {
+                              // We don't know what this page type is. We're allowed to skip non-data
+                              // pages.
+                              return seastar::make_ready_future<>();
+                            }
+                          }
+                        );
+                      }
+                    );
+                  }
+                );
+              }
+            ).then(
+              [retval] {
+                return seastar::make_ready_future < std::shared_ptr < Page >> (retval);
+              }
+            );
+          }
   );
 }
-
-#if 0
-std::shared_ptr<Page> SerializedPageReader::NextPage() {
-  // Loop here because there may be unhandled page types that we skip until
-  // finding a page that we do know what to do with
-
-  while (seen_num_rows_ < total_num_rows_) {
-    uint32_t header_size = 0;
-    uint32_t allowed_page_size = kDefaultPageHeaderSize;
-
-    // Page headers can be very large because of page statistics
-    // We try to deserialize a larger buffer progressively
-    // until a maximum allowed header limit
-    while (true) {
-      string_view buffer;
-      PARQUET_THROW_NOT_OK(stream_->Peek(allowed_page_size, &buffer));
-      if (buffer.size() == 0) {
-        return std::shared_ptr<Page>(nullptr);
-      }
-
-      // This gets used, then set by DeserializeThriftMsg
-      header_size = static_cast<uint32_t>(buffer.size());
-      try {
-        if (crypto_ctx_.meta_decryptor != nullptr) {
-          UpdateDecryption(crypto_ctx_.meta_decryptor, encryption::kDictionaryPageHeader,
-                           data_page_header_aad_);
-        }
-        DeserializeThriftMsg(reinterpret_cast<const uint8_t*>(buffer.data()),
-                             &header_size, &current_page_header_,
-                             crypto_ctx_.meta_decryptor);
-        break;
-      } catch (std::exception& e) {
-        // Failed to deserialize. Double the allowed page header size and try again
-        std::stringstream ss;
-        ss << e.what();
-        allowed_page_size *= 2;
-        if (allowed_page_size > max_page_header_size_) {
-          ss << "Deserializing page header failed.\n";
-          throw ParquetException(ss.str());
-        }
-      }
-    }
-    // Advance the stream offset
-    PARQUET_THROW_NOT_OK(stream_->Advance(header_size));
-
-    int compressed_len = current_page_header_.compressed_page_size;
-    int uncompressed_len = current_page_header_.uncompressed_page_size;
-    if (crypto_ctx_.data_decryptor != nullptr) {
-      UpdateDecryption(crypto_ctx_.data_decryptor, encryption::kDictionaryPage,
-                       data_page_aad_);
-    }
-    // Read the compressed data page.
-    std::shared_ptr<Buffer> page_buffer;
-    PARQUET_THROW_NOT_OK(stream_->Read(compressed_len, &page_buffer));
-    if (page_buffer->size() != compressed_len) {
-      std::stringstream ss;
-      ss << "Page was smaller (" << page_buffer->size() << ") than expected ("
-         << compressed_len << ")";
-      ParquetException::EofException(ss.str());
-    }
-
-    // Decrypt it if we need to
-    if (crypto_ctx_.data_decryptor != nullptr) {
-      PARQUET_THROW_NOT_OK(decryption_buffer_->Resize(
-          compressed_len - crypto_ctx_.data_decryptor->CiphertextSizeDelta()));
-      compressed_len = crypto_ctx_.data_decryptor->Decrypt(
-          page_buffer->data(), compressed_len, decryption_buffer_->mutable_data());
-
-      page_buffer = decryption_buffer_;
-    }
-    // Uncompress it if we need to
-    if (decompressor_ != nullptr) {
-      // Grow the uncompressed buffer if we need to.
-      if (uncompressed_len > static_cast<int>(decompression_buffer_->size())) {
-        PARQUET_THROW_NOT_OK(decompression_buffer_->Resize(uncompressed_len, false));
-      }
-      PARQUET_THROW_NOT_OK(
-          decompressor_->Decompress(compressed_len, page_buffer->data(), uncompressed_len,
-                                    decompression_buffer_->mutable_data()));
-      page_buffer = decompression_buffer_;
-    }
-
-    if (current_page_header_.type == format::PageType::DICTIONARY_PAGE) {
-      crypto_ctx_.start_decrypt_with_dictionary_page = false;
-      const format::DictionaryPageHeader& dict_header =
-          current_page_header_.dictionary_page_header;
-
-      bool is_sorted = dict_header.__isset.is_sorted ? dict_header.is_sorted : false;
-
-      return std::make_shared<DictionaryPage>(page_buffer, dict_header.num_values,
-                                              FromThrift(dict_header.encoding),
-                                              is_sorted);
-    } else if (current_page_header_.type == format::PageType::DATA_PAGE) {
-      ++page_ordinal_;
-      const format::DataPageHeader& header = current_page_header_.data_page_header;
-
-      EncodedStatistics page_statistics;
-      if (header.__isset.statistics) {
-        const format::Statistics& stats = header.statistics;
-        if (stats.__isset.max) {
-          page_statistics.set_max(stats.max);
-        }
-        if (stats.__isset.min) {
-          page_statistics.set_min(stats.min);
-        }
-        if (stats.__isset.null_count) {
-          page_statistics.set_null_count(stats.null_count);
-        }
-        if (stats.__isset.distinct_count) {
-          page_statistics.set_distinct_count(stats.distinct_count);
-        }
-      }
-
-      seen_num_rows_ += header.num_values;
-
-      return std::make_shared<DataPageV1>(
-          page_buffer, header.num_values, FromThrift(header.encoding),
-          FromThrift(header.definition_level_encoding),
-          FromThrift(header.repetition_level_encoding), page_statistics);
-    } else if (current_page_header_.type == format::PageType::DATA_PAGE_V2) {
-      ++page_ordinal_;
-      const format::DataPageHeaderV2& header = current_page_header_.data_page_header_v2;
-      bool is_compressed = header.__isset.is_compressed ? header.is_compressed : false;
-
-      seen_num_rows_ += header.num_values;
-
-      return std::make_shared<DataPageV2>(
-          page_buffer, header.num_values, header.num_nulls, header.num_rows,
-          FromThrift(header.encoding), header.definition_levels_byte_length,
-          header.repetition_levels_byte_length, is_compressed);
-    } else {
-      // We don't know what this page type is. We're allowed to skip non-data
-      // pages.
-      continue;
-    }
-  }
-  return std::shared_ptr<Page>(nullptr);
-}
-#endif
 
 #if 0
 std::unique_ptr<PageReader> PageReader::Open(
