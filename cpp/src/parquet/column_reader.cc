@@ -1483,7 +1483,6 @@ static constexpr int16_t kNonPageOrdinal = static_cast<int16_t>(-1);
 // and the page metadata.
 class SerializedPageReader : public PageReader {
  public:
-#if 0
   SerializedPageReader(const std::shared_ptr<FutureInputStream>& stream,
                        int64_t total_num_rows, Compression::type codec,
                        ::arrow::MemoryPool* pool, const CryptoContext* crypto_ctx)
@@ -1500,7 +1499,7 @@ class SerializedPageReader : public PageReader {
     max_page_header_size_ = kDefaultMaxPageHeaderSize;
     decompressor_ = GetCodec(codec);
   }
-#endif
+
   // Implement the PageReader interface
   seastar::future<std::shared_ptr<Page>> NextPage() override;
 
@@ -1508,9 +1507,7 @@ class SerializedPageReader : public PageReader {
  private:
   void UpdateDecryption(const std::shared_ptr<Decryptor>& decryptor, int8_t module_type,
                         const std::string& page_aad);
-#if 0
   void InitDecryption();
-#endif
   std::shared_ptr<FutureInputStream> stream_;
 
   format::PageHeader current_page_header_;
@@ -1550,7 +1547,7 @@ class SerializedPageReader : public PageReader {
   // Encryption
   std::shared_ptr<ResizableBuffer> decryption_buffer_;
 };
-#if 0
+
 void SerializedPageReader::InitDecryption() {
   // Prepare the AAD for quick update later.
   if (crypto_ctx_.data_decryptor != nullptr) {
@@ -1566,7 +1563,6 @@ void SerializedPageReader::InitDecryption() {
         crypto_ctx_.row_group_ordinal, crypto_ctx_.column_ordinal, kNonPageOrdinal);
   }
 }
-#endif
 
 void SerializedPageReader::UpdateDecryption(const std::shared_ptr<Decryptor>& decryptor,
                                             int8_t module_type,
@@ -1753,14 +1749,13 @@ seastar::future<std::shared_ptr<Page>> SerializedPageReader::NextPage() {
   );
 }
 
-#if 0
 std::unique_ptr<PageReader> PageReader::Open(
-    const std::shared_ptr<ArrowInputStream>& stream, int64_t total_num_rows,
+    const std::shared_ptr<FutureInputStream>& stream, int64_t total_num_rows,
     Compression::type codec, ::arrow::MemoryPool* pool, const CryptoContext* ctx) {
   return std::unique_ptr<PageReader>(
       new SerializedPageReader(stream, total_num_rows, codec, pool, ctx));
 }
-#endif
+
 // ----------------------------------------------------------------------
 // Impl base class for TypedColumnReader and RecordReader
 

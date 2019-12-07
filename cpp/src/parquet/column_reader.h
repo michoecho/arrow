@@ -387,20 +387,16 @@ using ByteArrayReader = TypedColumnReader<ByteArrayType>;
 using FixedLenByteArrayReader = TypedColumnReader<FLBAType>;
 
 namespace seastarized{
-// todo: is it needed?
-//class Decryptor;
 
 // Abstract page iterator interface. This way, we can feed column pages to the
 // ColumnReader through whatever mechanism we choose
 class PARQUET_EXPORT PageReader {
  public:
   virtual ~PageReader() = default;
-#if 0
   static std::unique_ptr<PageReader> Open(
       const std::shared_ptr<FutureInputStream>& stream, int64_t total_num_rows,
       Compression::type codec, ::arrow::MemoryPool* pool = ::arrow::default_memory_pool(),
       const CryptoContext* ctx = NULLPTR);
-#endif
 
   // @returns: shared_ptr<Page>(nullptr) on EOS, std::shared_ptr<Page>
   // containing new Page otherwise
