@@ -1471,6 +1471,7 @@ std::shared_ptr<RecordReader> RecordReader::Make(const ColumnDescriptor* descr,
 
 }  // namespace internal
 namespace seastarized {
+using std::string_view;
 // ----------------------------------------------------------------------
 // SerializedPageReader deserializes Thrift metadata and pages that have been
 // assembled in a serialized stream for storing in a Parquet files
@@ -1483,7 +1484,7 @@ static constexpr int16_t kNonPageOrdinal = static_cast<int16_t>(-1);
 class SerializedPageReader : public PageReader {
  public:
 #if 0
-  SerializedPageReader(const std::shared_ptr<ArrowInputStream>& stream,
+  SerializedPageReader(const std::shared_ptr<FutureInputStream>& stream,
                        int64_t total_num_rows, Compression::type codec,
                        ::arrow::MemoryPool* pool, const CryptoContext* crypto_ctx)
       : stream_(stream),
@@ -1499,12 +1500,11 @@ class SerializedPageReader : public PageReader {
     max_page_header_size_ = kDefaultMaxPageHeaderSize;
     decompressor_ = GetCodec(codec);
   }
-
+#endif
   // Implement the PageReader interface
-  std::shared_ptr<Page> NextPage() override;
+  seastar::future<std::shared_ptr<Page>> NextPage() override;
 
   void set_max_page_header_size(uint32_t size) override { max_page_header_size_ = size; }
-#endif
  private:
 #if 0
   void UpdateDecryption(const std::shared_ptr<Decryptor>& decryptor, int8_t module_type,
@@ -1585,6 +1585,45 @@ void SerializedPageReader::UpdateDecryption(const std::shared_ptr<Decryptor>& de
   }
 }
 #endif
+
+seastar::future<std::shared_ptr<Page>> SerializedPageReader::NextPage() {
+  // Loop here because there may be unhandled page types that we skip until
+  // finding a page that we do know what to do with
+
+  bool break_loops = false;
+  uint32_t header_size = 0, allowed_page_size = kDefaultPageHeaderSize;
+  string_view buffer;
+  std::shared_ptr<Buffer> page_buffer;
+  std::shared_ptr<Page> retval(nullptr);
+
+  if (seen_num_rows_ >= total_num_rows_) {
+    return seastar::make_ready_future < std::shared_ptr < Page >> (retval);
+  }
+
+  // do..while instead of while
+  return seastar::do_with(std::move(break_loops), std::move(header_size), std::move(allowed_page_size),
+                          std::move(buffer), std::move(page_buffer), std::move(retval),
+      [this](auto &break_loops, auto &header_size, auto &allowed_page_size, auto &buffer, auto &page_buffer, auto &retval) {
+        return seastar::do_until(
+          [&retval, break_loops, this] {
+            return !break_loops && seen_num_rows_ < total_num_rows_ && retval.get() == nullptr;
+          },
+          [&, this] {
+            return seastar::do_until(
+              [&break_loops, &retval] {
+                return !break_loops && retval.get() == nullptr;
+              },
+              [&, this] {
+                return seastar::make_ready_future<>();
+              }
+            );
+          }
+        );
+      }
+  ).then([retval] {
+    return seastar::make_ready_future < std::shared_ptr < Page >> (retval);
+  });
+}
 
 #if 0
 std::shared_ptr<Page> SerializedPageReader::NextPage() {

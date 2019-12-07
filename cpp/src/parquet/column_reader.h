@@ -21,10 +21,13 @@
 #include <memory>
 #include <vector>
 
+#include <seastar/core/fstream.hh>
+
 #include "parquet/exception.h"
 #include "parquet/platform.h"
 #include "parquet/schema.h"
 #include "parquet/types.h"
+#include "io.h"
 
 namespace arrow {
 
@@ -394,16 +397,16 @@ class PARQUET_EXPORT PageReader {
   virtual ~PageReader() = default;
 #if 0
   static std::unique_ptr<PageReader> Open(
-      const std::shared_ptr<ArrowInputStream>& stream, int64_t total_num_rows,
+      const std::shared_ptr<FutureInputStream>& stream, int64_t total_num_rows,
       Compression::type codec, ::arrow::MemoryPool* pool = ::arrow::default_memory_pool(),
       const CryptoContext* ctx = NULLPTR);
+#endif
 
   // @returns: shared_ptr<Page>(nullptr) on EOS, std::shared_ptr<Page>
   // containing new Page otherwise
-  virtual std::shared_ptr<Page> NextPage() = 0;
+  virtual seastar::future<std::shared_ptr<Page>> NextPage() = 0;
 
   virtual void set_max_page_header_size(uint32_t size) = 0;
-#endif
 };
 
 class PARQUET_EXPORT ColumnReader {
