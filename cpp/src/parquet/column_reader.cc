@@ -1761,17 +1761,14 @@ std::unique_ptr<PageReader> PageReader::Open(
 
 // PLAIN_DICTIONARY is deprecated but used to be used as a dictionary index
 // encoding.
-#if 0
 static bool IsDictionaryIndexEncoding(const Encoding::type& e) {
   return e == Encoding::RLE_DICTIONARY || e == Encoding::PLAIN_DICTIONARY;
 }
-#endif
 
 template <typename DType>
 class ColumnReaderImplBase {
  public:
   using T = typename DType::c_type;
-#if 0
   ColumnReaderImplBase(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
       : descr_(descr),
         max_def_level_(descr->max_definition_level()),
@@ -1783,7 +1780,6 @@ class ColumnReaderImplBase {
         current_encoding_(Encoding::UNKNOWN) {}
 
   virtual ~ColumnReaderImplBase() = default;
-#endif
  protected:
 #if 0
   // Read up to batch_size values from the current data page into the
