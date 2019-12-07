@@ -2043,190 +2043,215 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
                               public ColumnReaderImplBase<DType> {
  public:
   using T = typename DType::c_type;
-#if 0
+
   TypedColumnReaderImpl(const ColumnDescriptor* descr, std::unique_ptr<PageReader> pager,
                         ::arrow::MemoryPool* pool)
       : ColumnReaderImplBase<DType>(descr, pool) {
     this->pager_ = std::move(pager);
   }
 
-  bool HasNext() override { return this->HasNextInternal(); }
+  seastar::future<bool> HasNext() override { return this->HasNextInternal(); }
 
-  int64_t ReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
+  seastar::future<int64_t> ReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                     T* values, int64_t* values_read) override;
 
-  int64_t ReadBatchSpaced(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
+  seastar::future<int64_t> ReadBatchSpaced(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                           T* values, uint8_t* valid_bits, int64_t valid_bits_offset,
                           int64_t* levels_read, int64_t* values_read,
                           int64_t* null_count) override;
 
-  int64_t Skip(int64_t num_rows_to_skip) override;
+  seastar::future<int64_t> Skip(int64_t num_rows_to_skip) override;
 
   Type::type type() const override { return this->descr_->physical_type(); }
-#endif
+
   const ColumnDescriptor* descr() const override { return this->descr_; }
 };
 
-#if 0
 template <typename DType>
-int64_t TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_size, int16_t* def_levels,
+seastar::future<int64_t> TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_size, int16_t* def_levels,
                                                 int16_t* rep_levels, T* values,
                                                 int64_t* values_read) {
   // HasNext invokes ReadNewPage
-  if (!HasNext()) {
-    *values_read = 0;
-    return 0;
-  }
-
-  // TODO(wesm): keep reading data pages until batch_size is reached, or the
-  // row group is finished
-  batch_size =
-      std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);
-
-  int64_t num_def_levels = 0;
-  int64_t num_rep_levels = 0;
-
-  int64_t values_to_read = 0;
-
-  // If the field is required and non-repeated, there are no definition levels
-  if (this->max_def_level_ > 0 && def_levels) {
-    num_def_levels = this->ReadDefinitionLevels(batch_size, def_levels);
-    // TODO(wesm): this tallying of values-to-decode can be performed with better
-    // cache-efficiency if fused with the level decoding.
-    for (int64_t i = 0; i < num_def_levels; ++i) {
-      if (def_levels[i] == this->max_def_level_) {
-        ++values_to_read;
-      }
+  return HasNext().then([=] (auto & has_next){
+    if (!has_next){
+      return seastar::make_ready_future<int64_t>(0);
     }
-  } else {
-    // Required field, read all values
-    values_to_read = batch_size;
-  }
+    // TODO(wesm): keep reading data pages until batch_size is reached, or the
+    // row group is finished
+    batch_size =
+        std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);
 
-  // Not present for non-repeated fields
-  if (this->max_rep_level_ > 0 && rep_levels) {
-    num_rep_levels = this->ReadRepetitionLevels(batch_size, rep_levels);
-    if (def_levels && num_def_levels != num_rep_levels) {
-      throw ParquetException("Number of decoded rep / def levels did not match");
-    }
-  }
+    int64_t num_def_levels = 0;
+    int64_t num_rep_levels = 0;
 
-  *values_read = this->ReadValues(values_to_read, values);
-  int64_t total_values = std::max(num_def_levels, *values_read);
-  this->ConsumeBufferedValues(total_values);
+    int64_t values_to_read = 0;
 
-  return total_values;
-}
-#endif
-
-#if 0
-template <typename DType>
-int64_t TypedColumnReaderImpl<DType>::ReadBatchSpaced(
-    int64_t batch_size, int16_t* def_levels, int16_t* rep_levels, T* values,
-    uint8_t* valid_bits, int64_t valid_bits_offset, int64_t* levels_read,
-    int64_t* values_read, int64_t* null_count_out) {
-  // HasNext invokes ReadNewPage
-  if (!HasNext()) {
-    *levels_read = 0;
-    *values_read = 0;
-    *null_count_out = 0;
-    return 0;
-  }
-
-  int64_t total_values;
-  // TODO(wesm): keep reading data pages until batch_size is reached, or the
-  // row group is finished
-  batch_size =
-      std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);
-
-  // If the field is required and non-repeated, there are no definition levels
-  if (this->max_def_level_ > 0) {
-    int64_t num_def_levels = this->ReadDefinitionLevels(batch_size, def_levels);
-
-    // Not present for non-repeated fields
-    if (this->max_rep_level_ > 0) {
-      int64_t num_rep_levels = this->ReadRepetitionLevels(batch_size, rep_levels);
-      if (num_def_levels != num_rep_levels) {
-        throw ParquetException("Number of decoded rep / def levels did not match");
-      }
-    }
-
-    const bool has_spaced_values = internal::HasSpacedValues(this->descr_);
-
-    int64_t null_count = 0;
-    if (!has_spaced_values) {
-      int values_to_read = 0;
+    // If the field is required and non-repeated, there are no definition levels
+    if (this->max_def_level_ > 0 && def_levels) {
+      num_def_levels = this->ReadDefinitionLevels(batch_size, def_levels);
+      // TODO(wesm): this tallying of values-to-decode can be performed with better
+      // cache-efficiency if fused with the level decoding.
       for (int64_t i = 0; i < num_def_levels; ++i) {
         if (def_levels[i] == this->max_def_level_) {
           ++values_to_read;
         }
       }
-      total_values = this->ReadValues(values_to_read, values);
+    } else {
+      // Required field, read all values
+      values_to_read = batch_size;
+    }
+
+    // Not present for non-repeated fields
+    if (this->max_rep_level_ > 0 && rep_levels) {
+      num_rep_levels = this->ReadRepetitionLevels(batch_size, rep_levels);
+      if (def_levels && num_def_levels != num_rep_levels) {
+        throw ParquetException("Number of decoded rep / def levels did not match");
+      }
+    }
+
+    *values_read = this->ReadValues(values_to_read, values);
+    int64_t total_values = std::max(num_def_levels, *values_read);
+    this->ConsumeBufferedValues(total_values);
+
+    return total_values;
+  });
+}
+
+template <typename DType>
+seastar::future<int64_t> TypedColumnReaderImpl<DType>::ReadBatchSpaced(
+    int64_t batch_size, int16_t* def_levels, int16_t* rep_levels, T* values,
+    uint8_t* valid_bits, int64_t valid_bits_offset, int64_t* levels_read,
+    int64_t* values_read, int64_t* null_count_out) {
+  // HasNext invokes ReadNewPage
+
+  return HasNext().then([=] (auto & has_next){
+    if (!has_next){
+      *levels_read = 0;
+      *values_read = 0;
+      *null_count_out = 0;
+      return seastar::make_ready_future<int64_t>(0);
+    }
+    int64_t total_values;
+    // TODO(wesm): keep reading data pages until batch_size is reached, or the
+    // row group is finished
+    batch_size =
+        std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);
+
+    // If the field is required and non-repeated, there are no definition levels
+    if (this->max_def_level_ > 0) {
+      int64_t num_def_levels = this->ReadDefinitionLevels(batch_size, def_levels);
+
+      // Not present for non-repeated fields
+      if (this->max_rep_level_ > 0) {
+        int64_t num_rep_levels = this->ReadRepetitionLevels(batch_size, rep_levels);
+        if (num_def_levels != num_rep_levels) {
+          throw ParquetException("Number of decoded rep / def levels did not match");
+        }
+      }
+
+      const bool has_spaced_values = ::parquet::internal::HasSpacedValues(this->descr_);
+
+      int64_t null_count = 0;
+      if (!has_spaced_values) {
+        int values_to_read = 0;
+        for (int64_t i = 0; i < num_def_levels; ++i) {
+          if (def_levels[i] == this->max_def_level_) {
+            ++values_to_read;
+          }
+        }
+        total_values = this->ReadValues(values_to_read, values);
+        for (int64_t i = 0; i < total_values; i++) {
+          ::arrow::BitUtil::SetBit(valid_bits, valid_bits_offset + i);
+        }
+        *values_read = total_values;
+      } else {
+        ::parquet::internal::DefinitionLevelsToBitmap(def_levels, num_def_levels, this->max_def_level_,
+                                          this->max_rep_level_, values_read, &null_count,
+                                          valid_bits, valid_bits_offset);
+        total_values =
+            this->ReadValuesSpaced(*values_read, values, static_cast<int>(null_count),
+                                  valid_bits, valid_bits_offset);
+      }
+      *levels_read = num_def_levels;
+      *null_count_out = null_count;
+
+    } else {
+      // Required field, read all values
+      total_values = this->ReadValues(batch_size, values);
       for (int64_t i = 0; i < total_values; i++) {
         ::arrow::BitUtil::SetBit(valid_bits, valid_bits_offset + i);
       }
-      *values_read = total_values;
-    } else {
-      internal::DefinitionLevelsToBitmap(def_levels, num_def_levels, this->max_def_level_,
-                                         this->max_rep_level_, values_read, &null_count,
-                                         valid_bits, valid_bits_offset);
-      total_values =
-          this->ReadValuesSpaced(*values_read, values, static_cast<int>(null_count),
-                                 valid_bits, valid_bits_offset);
+      *null_count_out = 0;
+      *levels_read = total_values;
     }
-    *levels_read = num_def_levels;
-    *null_count_out = null_count;
 
-  } else {
-    // Required field, read all values
-    total_values = this->ReadValues(batch_size, values);
-    for (int64_t i = 0; i < total_values; i++) {
-      ::arrow::BitUtil::SetBit(valid_bits, valid_bits_offset + i);
-    }
-    *null_count_out = 0;
-    *levels_read = total_values;
-  }
-
-  this->ConsumeBufferedValues(*levels_read);
-  return total_values;
+    this->ConsumeBufferedValues(*levels_read);
+    return seastar::make_ready_future<int64_t>(total_values);
+  });
 }
-#endif
 
-#if 0
 template <typename DType>
-int64_t TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_skip) {
+seastar::future<int64_t> TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_skip) {
   int64_t rows_to_skip = num_rows_to_skip;
-  while (HasNext() && rows_to_skip > 0) {
-    // If the number of rows to skip is more than the number of undecoded values, skip the
-    // Page.
-    if (rows_to_skip > (this->num_buffered_values_ - this->num_decoded_values_)) {
-      rows_to_skip -= this->num_buffered_values_ - this->num_decoded_values_;
-      this->num_decoded_values_ = this->num_buffered_values_;
-    } else {
-      // We need to read this Page
-      // Jump to the right offset in the Page
-      int64_t batch_size = 1024;  // ReadBatch with a smaller memory footprint
-      int64_t values_read = 0;
+  int64_t values_read;
+  bool has_next = true;
+  
+  return do_with(std::move(rows_to_skip), std::move(values_read), std::move(has_next),
+    [this, num_rows_to_skip](auto &rows_to_skip, auto &values_read, auto &has_next){
+      return seastar::do_until(
+        [&has_next, &rows_to_skip]{
+          return has_next && rows_to_skip > 0;
+        },
+        [this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] () mutable {
+          return HasNext().then([this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] (auto & has_next_result) mutable {
+            has_next = has_next_result;
+            if (!has_next){
+              return seastar::make_ready_future<>();
+            } else{
+              return seastar::make_ready_future<>().then([this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] () mutable {
+                // If the number of rows to skip is more than the number of undecoded values, skip the
+                // Page.
+                if (rows_to_skip > (this->num_buffered_values_ - this->num_decoded_values_)) {
+                  rows_to_skip -= this->num_buffered_values_ - this->num_decoded_values_;
+                  this->num_decoded_values_ = this->num_buffered_values_;
+                  return seastar::make_ready_future<>();
+                } else {
+                  // We need to read this Page
+                  // Jump to the right offset in the Page
+                  int64_t batch_size = 1024;  // ReadBatch with a smaller memory footprint
+                  values_read = 0;
 
-      // This will be enough scratch space to accommodate 16-bit levels or any
-      // value type
-      std::shared_ptr<ResizableBuffer> scratch = AllocateBuffer(
-          this->pool_, batch_size * type_traits<DType::type_num>::value_byte_size);
+                  // This will be enough scratch space to accommodate 16-bit levels or any
+                  // value type
+                  std::shared_ptr<ResizableBuffer> scratch = AllocateBuffer(
+                      this->pool_, batch_size * type_traits<DType::type_num>::value_byte_size);
 
-      do {
-        batch_size = std::min(batch_size, rows_to_skip);
-        values_read =
-            ReadBatch(static_cast<int>(batch_size),
-                      reinterpret_cast<int16_t*>(scratch->mutable_data()),
-                      reinterpret_cast<int16_t*>(scratch->mutable_data()),
-                      reinterpret_cast<T*>(scratch->mutable_data()), &values_read);
-        rows_to_skip -= values_read;
-      } while (values_read > 0 && rows_to_skip > 0);
-    }
-  }
-  return num_rows_to_skip - rows_to_skip;
+                  return seastar::do_until(
+                    [&values_read, &rows_to_skip]{
+                      return values_read > 0 && rows_to_skip > 0;
+                    },
+                    [=, &rows_to_skip, &values_read, &has_next] () mutable {
+                      batch_size = std::min(batch_size, rows_to_skip);
+                      return ReadBatch(static_cast<int>(batch_size),
+                                  reinterpret_cast<int16_t*>(scratch->mutable_data()),
+                                  reinterpret_cast<int16_t*>(scratch->mutable_data()),
+                                  reinterpret_cast<T*>(scratch->mutable_data()),
+                                  &values_read).then([&values_read, &rows_to_skip](auto & batch_read){
+                                    values_read = batch_read;
+                                    rows_to_skip -= values_read;
+                                    return seastar::make_ready_future<>();
+                                  });
+                    }
+                  );
+                }
+              });
+            }
+        }).then([num_rows_to_skip, &rows_to_skip]{
+          return seastar::make_ready_future(num_rows_to_skip - rows_to_skip);
+        });
+      });
+  });
 }
-#endif
 
 // ----------------------------------------------------------------------
 // Dynamic column reader constructor

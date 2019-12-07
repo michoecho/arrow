@@ -427,7 +427,7 @@ template <typename DType>
 class TypedColumnReader : public ColumnReader {
  public:
   typedef typename DType::c_type T;
-#if 0
+
   // Read a batch of repetition levels, definition levels, and values from the
   // column.
   //
@@ -445,7 +445,7 @@ class TypedColumnReader : public ColumnReader {
   // This API is the same for both V1 and V2 of the DataPage
   //
   // @returns: actual number of levels read (see values_read for number of values read)
-  virtual int64_t ReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
+  virtual seastar::future<int64_t> ReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                             T* values, int64_t* values_read) = 0;
 
   /// Read a batch of repetition levels, definition levels, and values from the
@@ -482,15 +482,14 @@ class TypedColumnReader : public ColumnReader {
   ///   (i.e. definition_level == max_definition_level - 1)
   /// @param[out] null_count The number of nulls on the lowest levels.
   ///   (i.e. (values_read - null_count) is total number of non-null entries)
-  virtual int64_t ReadBatchSpaced(int64_t batch_size, int16_t* def_levels,
+  virtual seastar::future<int64_t> ReadBatchSpaced(int64_t batch_size, int16_t* def_levels,
                                   int16_t* rep_levels, T* values, uint8_t* valid_bits,
                                   int64_t valid_bits_offset, int64_t* levels_read,
                                   int64_t* values_read, int64_t* null_count) = 0;
 
   // Skip reading levels
   // Returns the number of levels skipped
-  virtual int64_t Skip(int64_t num_rows_to_skip) = 0;
-#endif
+  virtual seastar::future<int64_t> Skip(int64_t num_rows_to_skip) = 0;
 };
 
 namespace internal {
