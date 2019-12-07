@@ -1759,11 +1759,13 @@ std::unique_ptr<PageReader> PageReader::Open(
 // ----------------------------------------------------------------------
 // Impl base class for TypedColumnReader and RecordReader
 
+#if 0
 // PLAIN_DICTIONARY is deprecated but used to be used as a dictionary index
 // encoding.
 static bool IsDictionaryIndexEncoding(const Encoding::type& e) {
   return e == Encoding::RLE_DICTIONARY || e == Encoding::PLAIN_DICTIONARY;
 }
+#endif
 
 template <typename DType>
 class ColumnReaderImplBase {
@@ -1781,7 +1783,6 @@ class ColumnReaderImplBase {
 
   virtual ~ColumnReaderImplBase() = default;
  protected:
-#if 0
   // Read up to batch_size values from the current data page into the
   // pre-allocated memory T*
   //
@@ -1813,15 +1814,17 @@ class ColumnReaderImplBase {
     return definition_level_decoder_.Decode(static_cast<int>(batch_size), levels);
   }
 
-  bool HasNextInternal() {
+  seastar::future<bool> HasNextInternal() {
     // Either there is no data page available yet, or the data page has been
     // exhausted
     if (num_buffered_values_ == 0 || num_decoded_values_ == num_buffered_values_) {
-      if (!ReadNewPage() || num_buffered_values_ == 0) {
-        return false;
-      }
+      return ReadNewPage().then([this](auto & new_page_read){
+        if (!new_page_read || num_buffered_values_ == 0) {
+          return seastar::make_ready_future<bool>(false);
+        }
+      });
     }
-    return true;
+    return seastar::make_ready_future<bool>(true);
   }
 
   // Read multiple repetition levels into preallocated memory
@@ -1834,24 +1837,24 @@ class ColumnReaderImplBase {
   }
 
   // Advance to the next data page
-  bool ReadNewPage() {
+  seastar::future<bool> ReadNewPage() {
     // Loop until we find the next data page.
-    while (true) {
+    return pager_->NextPage().then([this](auto & next_page) {
       current_page_ = pager_->NextPage();
       if (!current_page_) {
         // EOS
-        return false;
+        return seastar::make_ready_future<bool>(false);
       }
 
       if (current_page_->type() == PageType::DICTIONARY_PAGE) {
         ConfigureDictionary(static_cast<const DictionaryPage*>(current_page_.get()));
-        continue;
+        return ReadNewPage();
       } else if (current_page_->type() == PageType::DATA_PAGE) {
         const auto page = std::static_pointer_cast<DataPageV1>(current_page_);
         const int64_t levels_byte_size = InitializeLevelDecoders(
             *page, page->repetition_level_encoding(), page->definition_level_encoding());
         InitializeDataDecoder(*page, levels_byte_size);
-        return true;
+        return seastar::make_ready_future<bool>(true);
       } else if (current_page_->type() == PageType::DATA_PAGE_V2) {
         const auto page = std::static_pointer_cast<DataPageV2>(current_page_);
         // Repetition and definition levels are always encoded using RLE encoding
@@ -1859,14 +1862,13 @@ class ColumnReaderImplBase {
         const int64_t levels_byte_size =
             InitializeLevelDecoders(*page, Encoding::RLE, Encoding::RLE);
         InitializeDataDecoder(*page, levels_byte_size);
-        return true;
+        return seastar::make_ready_future<bool>(true);
       } else {
         // We don't know what this page type is. We're allowed to skip non-data
         // pages.
-        continue;
+        return ReadNewPage();
       }
-    }
-    return true;
+    });
   }
 
   void ConfigureDictionary(const DictionaryPage* page) {
@@ -1989,7 +1991,7 @@ class ColumnReaderImplBase {
     current_decoder_->SetData(static_cast<int>(num_buffered_values_), buffer,
                               static_cast<int>(data_size));
   }
-#endif
+
   const ColumnDescriptor* descr_;
   const int16_t max_def_level_;
   const int16_t max_rep_level_;
