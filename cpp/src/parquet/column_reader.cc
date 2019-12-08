@@ -2302,7 +2302,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
  public:
   using T = typename DType::c_type;
   using BASE = ColumnReaderImplBase<DType>;
-#if 0
+
   TypedRecordReader(const ColumnDescriptor* descr, MemoryPool* pool) : BASE(descr, pool) {
     nullable_values_ = ::parquet::internal::HasSpacedValues(descr);
     at_record_start_ = true;
@@ -2323,7 +2323,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     rep_levels_ = AllocateBuffer(pool);
     Reset();
   }
-#endif 
+
   int64_t available_values_current_page() const {
     return this->num_buffered_values_ - this->num_decoded_values_;
   }
@@ -2414,7 +2414,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
       });
     });
   }
-#if 0
+
   // We may outwardly have the appearance of having exhausted a column chunk
   // when in fact we are in the middle of processing the last batch
   bool has_values_to_process() const { return levels_position_ < levels_written_; }
@@ -2489,7 +2489,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     ReserveLevels(capacity);
     ReserveValues(capacity);
   }
-#endif
+
   void ReserveLevels(int64_t capacity) {
     if (this->max_def_level_ > 0 && (levels_written_ + capacity > levels_capacity_)) {
       int64_t new_levels_capacity = BitUtil::NextPower2(levels_capacity_ + 1);
@@ -2505,7 +2505,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
       levels_capacity_ = new_levels_capacity;
     }
   }
-#if 0
+
   void ReserveValues(int64_t capacity) {
     if (values_written_ + capacity > values_capacity_) {
       int64_t new_values_capacity = BitUtil::NextPower2(values_capacity_ + 1);
@@ -2592,7 +2592,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
         this->current_decoder_->Decode(ValuesHead<T>(), static_cast<int>(values_to_read));
     DCHECK_EQ(num_decoded, values_to_read);
   }
-#endif
+
   // Return number of logical records read
   int64_t ReadRecordData(int64_t num_records) {
     // Conservative upper bound
@@ -2620,7 +2620,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     int64_t null_count = 0;
     if (nullable_values_) {
       int64_t values_with_nulls = 0;
-      internal::DefinitionLevelsToBitmap(
+      ::parquet::internal::DefinitionLevelsToBitmap(
           def_levels() + start_levels_position, levels_position_ - start_levels_position,
           this->max_def_level_, this->max_rep_level_, &values_with_nulls, &null_count,
           valid_bits_->mutable_data(), values_written_);
@@ -2668,7 +2668,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     }
     std::cout << std::endl;
   }
-
+#endif
   void ResetValues() {
     if (values_written_ > 0) {
       // Resize to 0, but do not shrink to fit
@@ -2681,7 +2681,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
       null_count_ = 0;
     }
   }
-#endif
+
  protected:
   template <typename T>
   T* ValuesHead() {
