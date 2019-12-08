@@ -2255,6 +2255,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_
 
 // ----------------------------------------------------------------------
 // Dynamic column reader constructor
+#if 0
 std::shared_ptr<ColumnReader> ColumnReader::Make(const ColumnDescriptor* descr,
                                                  std::unique_ptr<PageReader> pager,
                                                  MemoryPool* pool) {
@@ -2289,6 +2290,7 @@ std::shared_ptr<ColumnReader> ColumnReader::Make(const ColumnDescriptor* descr,
   // Unreachable code, but supress compiler warning
   return std::shared_ptr<ColumnReader>(nullptr);
 }
+#endif
 
 // ----------------------------------------------------------------------
 // RecordReader
@@ -2300,7 +2302,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
  public:
   using T = typename DType::c_type;
   using BASE = ColumnReaderImplBase<DType>;
-
+#if 0
   TypedRecordReader(const ColumnDescriptor* descr, MemoryPool* pool) : BASE(descr, pool) {
     nullable_values_ = internal::HasSpacedValues(descr);
     at_record_start_ = true;
@@ -2325,7 +2327,9 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
   int64_t available_values_current_page() const {
     return this->num_buffered_values_ - this->num_decoded_values_;
   }
-
+#endif 
+  int64_t ReadRecords(int64_t num_records) override { return 0; }
+#if 0
   seastar::future<int64_t> ReadRecords(int64_t num_records) override {
     // Delimit records, then read values at the end
     int64_t records_read = 0;
@@ -2676,11 +2680,14 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
       null_count_ = 0;
     }
   }
+#endif
  protected:
+#if 0
   template <typename T>
   T* ValuesHead() {
     return reinterpret_cast<T*>(values_->mutable_data()) + values_written_;
   }
+#endif
 };
 
 class FLBARecordReader : public TypedRecordReader<FLBAType>,

@@ -215,7 +215,7 @@ class RecordReader {
 
   /// \brief Attempt to read indicated number of records from column chunk
   /// \return number of records read
-  virtual seastar::future<int64_t> ReadRecords(int64_t num_records) = 0;
+  virtual int64_t ReadRecords(int64_t num_records) = 0;
 
   /// \brief Pre-allocate space for data. Results in better flat read performance
   virtual void Reserve(int64_t num_values) = 0;
@@ -508,11 +508,10 @@ class RecordReader {
       const bool read_dictionary = false);
 #endif
   virtual ~RecordReader() = default;
-#if 0
   /// \brief Attempt to read indicated number of records from column chunk
   /// \return number of records read
   virtual int64_t ReadRecords(int64_t num_records) = 0;
-
+#if 0
   /// \brief Pre-allocate space for data. Results in better flat read performance
   virtual void Reserve(int64_t num_values) = 0;
 
