@@ -500,12 +500,11 @@ namespace internal {
 /// \since 1.3.0
 class RecordReader {
  public:
-#if 0
   static std::shared_ptr<RecordReader> Make(
       const ColumnDescriptor* descr,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool(),
       const bool read_dictionary = false);
-#endif
+
   virtual ~RecordReader() = default;
   
   /// \brief Attempt to read indicated number of records from column chunk
@@ -598,18 +597,14 @@ class RecordReader {
 
 class BinaryRecordReader : virtual public RecordReader {
  public:
-#if 0
   virtual std::vector<std::shared_ptr<::arrow::Array>> GetBuilderChunks() = 0;
-#endif
 };
 
 /// \brief Read records directly to dictionary-encoded Arrow form (int32
 /// indices). Only valid for BYTE_ARRAY columns
 class DictionaryRecordReader : virtual public RecordReader {
-#if 0
  public:
   virtual std::shared_ptr<::arrow::ChunkedArray> GetResult() = 0;
-#endif
 };
 
 }  // namespace internal

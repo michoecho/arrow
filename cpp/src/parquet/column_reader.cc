@@ -1810,7 +1810,7 @@ class ColumnReaderImplBase {
     // Either there is no data page available yet, or the data page has been
     // exhausted
     if (num_buffered_values_ == 0 || num_decoded_values_ == num_buffered_values_) {
-      return ReadNewPage().then([this](auto & new_page_read){
+      return ReadNewPage().then([this](bool new_page_read){
         if (!new_page_read || num_buffered_values_ == 0) {
           return seastar::make_ready_future<bool>(false);
         }
@@ -1831,8 +1831,8 @@ class ColumnReaderImplBase {
   // Advance to the next data page
   seastar::future<bool> ReadNewPage() {
     // Loop until we find the next data page.
-    return pager_->NextPage().then([this](auto & next_page) {
-      current_page_ = pager_->NextPage();
+    return pager_->NextPage().then([this](std::shared_ptr<parquet::Page> next_page) {
+      current_page_ = next_page;
       if (!current_page_) {
         // EOS
         return seastar::make_ready_future<bool>(false);
@@ -2064,7 +2064,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_s
                                                 int16_t* rep_levels, T* values,
                                                 int64_t* values_read) {
   // HasNext invokes ReadNewPage
-  return HasNext().then([=] (auto & has_next){
+  return HasNext().then([=] (bool has_next){
     if (!has_next){
       return seastar::make_ready_future<int64_t>(0);
     }
@@ -2116,7 +2116,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::ReadBatchSpaced(
     int64_t* values_read, int64_t* null_count_out) {
   // HasNext invokes ReadNewPage
 
-  return HasNext().then([=] (auto & has_next){
+  return HasNext().then([=] (bool has_next){
     if (!has_next){
       *levels_read = 0;
       *values_read = 0;
@@ -2195,7 +2195,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_
           return has_next && rows_to_skip > 0;
         },
         [this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] () mutable {
-          return HasNext().then([this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] (auto & has_next_result) mutable {
+          return HasNext().then([this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] (bool has_next_result) mutable {
             has_next = has_next_result;
             if (!has_next){
               return seastar::make_ready_future<>();
@@ -2228,7 +2228,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_
                                   reinterpret_cast<int16_t*>(scratch->mutable_data()),
                                   reinterpret_cast<int16_t*>(scratch->mutable_data()),
                                   reinterpret_cast<T*>(scratch->mutable_data()),
-                                  &values_read).then([&values_read, &rows_to_skip](auto & batch_read){
+                                  &values_read).then([&values_read, &rows_to_skip](int64_t batch_read){
                                     values_read = batch_read;
                                     rows_to_skip -= values_read;
                                     return seastar::make_ready_future<>();
@@ -2330,7 +2330,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     }
 
     if (at_record_start_ && records_read >= num_records){
-      return seastar::future<int64_t>(0); 
+      return seastar::make_ready_future<int64_t>(0); 
     }
 
     int64_t level_batch_size = std::max(::parquet::internal::kMinLevelBatchSize, num_records);
@@ -2340,12 +2340,12 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
       // If we are in the middle of a record, we continue until reaching the
       // desired number of records or the end of the current record if we've found
       // enough records
-      return do_until(
+      return seastar::do_until(
         [this, &break_loop, &records_read, num_records] {
           return !break_loop && (!at_record_start_ || records_read < num_records);
         },
         [=, &break_loop, &records_read] () mutable {
-          return this->HasNextInternal().then([=, &break_loop, &records_read](auto &has_next){
+          return this->HasNextInternal().then([=, &break_loop, &records_read](bool has_next){
             // Is there more data to read in this row group?
             if (!has_next) {
               if (!at_record_start_) {
@@ -2684,7 +2684,6 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
 class FLBARecordReader : public TypedRecordReader<FLBAType>,
                          virtual public BinaryRecordReader {
  public:
-#if 0
   FLBARecordReader(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
       : TypedRecordReader<FLBAType>(descr, pool), builder_(nullptr) {
     DCHECK_EQ(descr_->physical_type(), Type::FIXED_LEN_BYTE_ARRAY);
@@ -2730,7 +2729,7 @@ class FLBARecordReader : public TypedRecordReader<FLBAType>,
     }
     ResetValues();
   }
-#endif
+
  private:
   std::unique_ptr<::arrow::FixedSizeBinaryBuilder> builder_;
 };
@@ -2738,7 +2737,6 @@ class FLBARecordReader : public TypedRecordReader<FLBAType>,
 class ByteArrayChunkedRecordReader : public TypedRecordReader<ByteArrayType>,
                                      virtual public BinaryRecordReader {
  public:
-#if 0
   ByteArrayChunkedRecordReader(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
       : TypedRecordReader<ByteArrayType>(descr, pool) {
     DCHECK_EQ(descr_->physical_type(), Type::BYTE_ARRAY);
@@ -2770,7 +2768,6 @@ class ByteArrayChunkedRecordReader : public TypedRecordReader<ByteArrayType>,
     DCHECK_EQ(num_decoded, values_to_read - null_count);
     ResetValues();
   }
-#endif
 
  private:
   // Helper data structure for accumulating builder chunks
@@ -2780,7 +2777,6 @@ class ByteArrayChunkedRecordReader : public TypedRecordReader<ByteArrayType>,
 class ByteArrayDictionaryRecordReader : public TypedRecordReader<ByteArrayType>,
                                         virtual public DictionaryRecordReader {
  public:
-#if 0
   ByteArrayDictionaryRecordReader(const ColumnDescriptor* descr,
                                   ::arrow::MemoryPool* pool)
       : TypedRecordReader<ByteArrayType>(descr, pool), builder_(pool) {
@@ -2848,7 +2844,6 @@ class ByteArrayDictionaryRecordReader : public TypedRecordReader<ByteArrayType>,
     }
     DCHECK_EQ(num_decoded, values_to_read - null_count);
   }
-#endif
  private:
   using BinaryDictDecoder = DictDecoder<ByteArrayType>;
 
@@ -2856,7 +2851,6 @@ class ByteArrayDictionaryRecordReader : public TypedRecordReader<ByteArrayType>,
   std::vector<std::shared_ptr<::arrow::Array>> result_chunks_;
 };
 
-#if 0
 // TODO(wesm): Implement these to some satisfaction
 template <>
 void TypedRecordReader<Int96Type>::DebugPrintState() {}
@@ -2866,7 +2860,6 @@ void TypedRecordReader<ByteArrayType>::DebugPrintState() {}
 
 template <>
 void TypedRecordReader<FLBAType>::DebugPrintState() {}
-#endif
 
 #if 0
 std::shared_ptr<RecordReader> MakeByteArrayRecordReader(const ColumnDescriptor* descr,
