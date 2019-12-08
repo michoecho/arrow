@@ -412,14 +412,13 @@ class PARQUET_EXPORT ColumnReader {
   static std::shared_ptr<ColumnReader> Make(
       const ColumnDescriptor* descr, std::unique_ptr<PageReader> pager,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
-#if 0
+
   // Returns true if there are still values in this column.
-  virtual bool HasNext() = 0;
+  virtual seastar::future<bool> HasNext() = 0;
 
   virtual Type::type type() const = 0;
 
   virtual const ColumnDescriptor* descr() const = 0;
-#endif
 };
 
 // API to read values from a single column. This is a main client facing API.

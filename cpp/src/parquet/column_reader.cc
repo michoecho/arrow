@@ -1759,14 +1759,6 @@ std::unique_ptr<PageReader> PageReader::Open(
 // ----------------------------------------------------------------------
 // Impl base class for TypedColumnReader and RecordReader
 
-#if 0
-// PLAIN_DICTIONARY is deprecated but used to be used as a dictionary index
-// encoding.
-static bool IsDictionaryIndexEncoding(const Encoding::type& e) {
-  return e == Encoding::RLE_DICTIONARY || e == Encoding::PLAIN_DICTIONARY;
-}
-#endif
-
 template <typename DType>
 class ColumnReaderImplBase {
  public:
@@ -2642,7 +2634,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
 
     return records_read;
   }
-#if 0
+
   void DebugPrintState() override {
     const int16_t* def_levels = this->def_levels();
     const int16_t* rep_levels = this->rep_levels();
@@ -2668,7 +2660,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     }
     std::cout << std::endl;
   }
-#endif
+
   void ResetValues() {
     if (values_written_ > 0) {
       // Resize to 0, but do not shrink to fit
