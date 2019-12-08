@@ -611,9 +611,11 @@ static constexpr int64_t kMaxDictHeaderSize = 100;
 
 // ----------------------------------------------------------------------
 // RowGroupReader public API
-#if 0
+
 RowGroupReader::RowGroupReader(std::unique_ptr<Contents> contents)
         : contents_(std::move(contents)) {}
+
+#if 0
 std::shared_ptr<ColumnReader> RowGroupReader::Column(int i) {
     DCHECK(i < metadata()->num_columns())
             << "The RowGroup only has " << metadata()->num_columns()
@@ -625,22 +627,23 @@ std::shared_ptr<ColumnReader> RowGroupReader::Column(int i) {
             descr, std::move(page_reader),
             const_cast<ReaderProperties*>(contents_->properties())->memory_pool());
 }
+#endif
 
-std::unique_ptr<PageReader> RowGroupReader::GetColumnPageReader(int i) {
-    DCHECK(i < metadata()->num_columns())
-            << "The RowGroup only has " << metadata()->num_columns()
-            << "columns, requested column: " << i;
-    return contents_->GetColumnPageReader(i);
+seastar::future<std::unique_ptr<PageReader>> RowGroupReader::GetColumnPageReader(int i) {
+// TODO42 jacek42 logging42
+//  DCHECK(i < metadata()->num_columns())
+//          << "The RowGroup only has " << metadata()->num_columns()
+//          << "columns, requested column: " << i;
+  return contents_->GetColumnPageReader(i);
 }
 
 // Returns the rowgroup metadata
 const RowGroupMetaData* RowGroupReader::metadata() const { return contents_->metadata(); }
-#endif
 
 // RowGroupReader::Contents implementation for the Parquet file specification
 class SerializedRowGroup : public RowGroupReader::Contents {
 public:
-    SerializedRowGroup(const std::shared_ptr<ArrowInputFile>& source,
+    SerializedRowGroup(const std::shared_ptr<seastarized::RandomAccessFile>& source,
                        FileMetaData* file_metadata, int row_group_number,
                        const ReaderProperties& props,
                        InternalFileDecryptor* file_decryptor = nullptr)
@@ -651,12 +654,12 @@ public:
               file_decryptor_(file_decryptor) {
         row_group_metadata_ = file_metadata->RowGroup(row_group_number);
     }
-#if 0
+
     const RowGroupMetaData* metadata() const override { return row_group_metadata_.get(); }
 
     const ReaderProperties* properties() const override { return &properties_; }
 
-    std::unique_ptr<PageReader> GetColumnPageReader(int i) override {
+    seastar::future<std::unique_ptr<PageReader>> GetColumnPageReader(int i) override {
         // Read column chunk from the file
         auto col = row_group_metadata_->ColumnChunk(i, row_group_ordinal_, file_decryptor_);
 
@@ -668,60 +671,61 @@ public:
 
         int64_t col_length = col->total_compressed_size();
 
-        // PARQUET-816 workaround for old files created by older parquet-mr
-        const ApplicationVersion& version = file_metadata_->writer_version();
-        if (version.VersionLt(ApplicationVersion::PARQUET_816_FIXED_VERSION())) {
-            // The Parquet MR writer had a bug in 1.2.8 and below where it didn't include the
-            // dictionary page header size in total_compressed_size and total_uncompressed_size
-            // (see IMPALA-694). We add padding to compensate.
-            int64_t size = -1;
-            PARQUET_THROW_NOT_OK(source_->GetSize(&size));
-            int64_t bytes_remaining = size - (col_start + col_length);
-            int64_t padding = std::min<int64_t>(kMaxDictHeaderSize, bytes_remaining);
-            col_length += padding;
-        }
+//        TODO42 jacek42 there's a chance we don't actually need this
+//        // PARQUET-816 workaround for old files created by older parquet-mr
+//        const ApplicationVersion& version = file_metadata_->writer_version();
+//        if (version.VersionLt(ApplicationVersion::PARQUET_816_FIXED_VERSION())) {
+//            // The Parquet MR writer had a bug in 1.2.8 and below where it didn't include the
+//            // dictionary page header size in total_compressed_size and total_uncompressed_size
+//            // (see IMPALA-694). We add padding to compensate.
+//            int64_t size = -1;
+//            source_->GetSize(&size);
+//            int64_t bytes_remaining = size - (col_start + col_length);
+//            int64_t padding = std::min<int64_t>(kMaxDictHeaderSize, bytes_remaining);
+//            col_length += padding;
+//        }
 
-        std::shared_ptr<ArrowInputStream> stream =
-                properties_.GetStream(source_, col_start, col_length);
+        return properties_.GetStream(source_, col_start, col_length).then([=](std::shared_ptr<FutureInputStream> stream) {
+            std::unique_ptr<ColumnCryptoMetaData> crypto_metadata = col->crypto_metadata();
 
-        std::unique_ptr<ColumnCryptoMetaData> crypto_metadata = col->crypto_metadata();
+            // Column is encrypted only if crypto_metadata exists.
+            if (!crypto_metadata) {
+              return PageReader::Open(stream, col->num_values(), col->compression(),
+                                       properties_.memory_pool());
+            }
 
-        // Column is encrypted only if crypto_metadata exists.
-        if (!crypto_metadata) {
-            return PageReader::Open(stream, col->num_values(), col->compression(),
-                                    properties_.memory_pool());
-        }
+            // The column is encrypted
+            std::shared_ptr<Decryptor> meta_decryptor;
+            std::shared_ptr<Decryptor> data_decryptor;
+            // The column is encrypted with footer key
+            if (crypto_metadata->encrypted_with_footer_key()) {
+              meta_decryptor = file_decryptor_->GetFooterDecryptorForColumnMeta();
+              data_decryptor = file_decryptor_->GetFooterDecryptorForColumnData();
+              CryptoContext ctx(col->has_dictionary_page(), row_group_ordinal_,
+                                static_cast<int16_t>(i), meta_decryptor, data_decryptor);
+              return PageReader::Open(stream, col->num_values(), col->compression(),
+                                       properties_.memory_pool(), &ctx);
+            }
 
-        // The column is encrypted
-        std::shared_ptr<Decryptor> meta_decryptor;
-        std::shared_ptr<Decryptor> data_decryptor;
-        // The column is encrypted with footer key
-        if (crypto_metadata->encrypted_with_footer_key()) {
-            meta_decryptor = file_decryptor_->GetFooterDecryptorForColumnMeta();
-            data_decryptor = file_decryptor_->GetFooterDecryptorForColumnData();
+            // The column is encrypted with its own key
+            std::string column_key_metadata = crypto_metadata->key_metadata();
+            const std::string column_path = crypto_metadata->path_in_schema()->ToDotString();
+
+            meta_decryptor =
+                    file_decryptor_->GetColumnMetaDecryptor(column_path, column_key_metadata);
+            data_decryptor =
+                    file_decryptor_->GetColumnDataDecryptor(column_path, column_key_metadata);
+
             CryptoContext ctx(col->has_dictionary_page(), row_group_ordinal_,
                               static_cast<int16_t>(i), meta_decryptor, data_decryptor);
+
             return PageReader::Open(stream, col->num_values(), col->compression(),
-                                    properties_.memory_pool(), &ctx);
-        }
-
-        // The column is encrypted with its own key
-        std::string column_key_metadata = crypto_metadata->key_metadata();
-        const std::string column_path = crypto_metadata->path_in_schema()->ToDotString();
-
-        meta_decryptor =
-                file_decryptor_->GetColumnMetaDecryptor(column_path, column_key_metadata);
-        data_decryptor =
-                file_decryptor_->GetColumnDataDecryptor(column_path, column_key_metadata);
-
-        CryptoContext ctx(col->has_dictionary_page(), row_group_ordinal_,
-                          static_cast<int16_t>(i), meta_decryptor, data_decryptor);
-        return PageReader::Open(stream, col->num_values(), col->compression(),
-                                properties_.memory_pool(), &ctx);
+                                     properties_.memory_pool(), &ctx);
+        });
     }
-#endif
+
 private:
-    std::shared_ptr<ArrowInputFile> source_;
+    std::shared_ptr<RandomAccessFile> source_;
     FileMetaData* file_metadata_;
     std::unique_ptr<RowGroupMetaData> row_group_metadata_;
     ReaderProperties properties_;
