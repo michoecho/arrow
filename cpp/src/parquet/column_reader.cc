@@ -2255,7 +2255,6 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_
 
 // ----------------------------------------------------------------------
 // Dynamic column reader constructor
-#if 0
 std::shared_ptr<ColumnReader> ColumnReader::Make(const ColumnDescriptor* descr,
                                                  std::unique_ptr<PageReader> pager,
                                                  MemoryPool* pool) {
@@ -2290,7 +2289,6 @@ std::shared_ptr<ColumnReader> ColumnReader::Make(const ColumnDescriptor* descr,
   // Unreachable code, but supress compiler warning
   return std::shared_ptr<ColumnReader>(nullptr);
 }
-#endif
 
 // ----------------------------------------------------------------------
 // RecordReader
@@ -2302,7 +2300,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
  public:
   using T = typename DType::c_type;
   using BASE = ColumnReaderImplBase<DType>;
-#if 0
+
   TypedRecordReader(const ColumnDescriptor* descr, MemoryPool* pool) : BASE(descr, pool) {
     nullable_values_ = internal::HasSpacedValues(descr);
     at_record_start_ = true;
@@ -2328,73 +2326,88 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     return this->num_buffered_values_ - this->num_decoded_values_;
   }
 
-  int64_t ReadRecords(int64_t num_records) override {
+  seastar::future<int64_t> ReadRecords(int64_t num_records) override {
     // Delimit records, then read values at the end
     int64_t records_read = 0;
+    bool break_loop = false;
 
     if (levels_position_ < levels_written_) {
       records_read += ReadRecordData(num_records);
     }
 
-    int64_t level_batch_size = std::max(kMinLevelBatchSize, num_records);
-
-    // If we are in the middle of a record, we continue until reaching the
-    // desired number of records or the end of the current record if we've found
-    // enough records
-    while (!at_record_start_ || records_read < num_records) {
-      // Is there more data to read in this row group?
-      if (!this->HasNextInternal()) {
-        if (!at_record_start_) {
-          // We ended the row group while inside a record that we haven't seen
-          // the end of yet. So increment the record count for the last record in
-          // the row group
-          ++records_read;
-          at_record_start_ = true;
-        }
-        break;
-      }
-
-      /// We perform multiple batch reads until we either exhaust the row group
-      /// or observe the desired number of records
-      int64_t batch_size = std::min(level_batch_size, available_values_current_page());
-
-      // No more data in column
-      if (batch_size == 0) {
-        break;
-      }
-
-      if (this->max_def_level_ > 0) {
-        ReserveLevels(batch_size);
-
-        int16_t* def_levels = this->def_levels() + levels_written_;
-        int16_t* rep_levels = this->rep_levels() + levels_written_;
-
-        // Not present for non-repeated fields
-        int64_t levels_read = 0;
-        if (this->max_rep_level_ > 0) {
-          levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
-          if (this->ReadRepetitionLevels(batch_size, rep_levels) != levels_read) {
-            throw ParquetException("Number of decoded rep / def levels did not match");
-          }
-        } else if (this->max_def_level_ > 0) {
-          levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
-        }
-
-        // Exhausted column chunk
-        if (levels_read == 0) {
-          break;
-        }
-
-        levels_written_ += levels_read;
-        records_read += ReadRecordData(num_records - records_read);
-      } else {
-        // No repetition or definition levels
-        batch_size = std::min(num_records - records_read, batch_size);
-        records_read += ReadRecordData(batch_size);
-      }
+    if (at_record_start_ && records_read >= num_records){
+      return seastar::future<int64_t>(0); 
     }
 
-    return records_read;
+    int64_t level_batch_size = std::max(kMinLevelBatchSize, num_records);
+    
+    return seastar::do_with(std::move(records_read), std::move(break_loop),
+      [this, num_records, level_batch_size] (auto &records_read, auto &break_loop) {
+      // If we are in the middle of a record, we continue until reaching the
+      // desired number of records or the end of the current record if we've found
+      // enough records
+      return do_until(
+        [this, &break_loop, &records_read, num_records] {
+          return !break_loop && (!at_record_start_ || records_read < num_records);
+        },
+        [=, &break_loop, &records_read] mutable {
+          return this->HasNextInternal().then([=, &break_loop, &records_read](auto &has_next){
+            // Is there more data to read in this row group?
+            if (!has_next) {
+              if (!at_record_start_) {
+                // We ended the row group while inside a record that we haven't seen
+                // the end of yet. So increment the record count for the last record in
+                // the row group
+                ++records_read;
+                at_record_start_ = true;
+              }
+              break_loop = true;
+              return seastar::make_ready_future<>();
+            }
+
+            /// We perform multiple batch reads until we either exhaust the row group
+            /// or observe the desired number of records
+            int64_t batch_size = std::min(level_batch_size, available_values_current_page());
+
+            // No more data in column
+            if (batch_size == 0) {
+              break;
+            }
+
+            if (this->max_def_level_ > 0) {
+              ReserveLevels(batch_size);
+
+              int16_t* def_levels = this->def_levels() + levels_written_;
+              int16_t* rep_levels = this->rep_levels() + levels_written_;
+
+              // Not present for non-repeated fields
+              int64_t levels_read = 0;
+              if (this->max_rep_level_ > 0) {
+                levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
+                if (this->ReadRepetitionLevels(batch_size, rep_levels) != levels_read) {
+                  throw ParquetException("Number of decoded rep / def levels did not match");
+                }
+              } else if (this->max_def_level_ > 0) {
+                levels_read = this->ReadDefinitionLevels(batch_size, def_levels);
+              }
+
+              // Exhausted column chunk
+              if (levels_read == 0) {
+                break;
+              }
+
+              levels_written_ += levels_read;
+              records_read += ReadRecordData(num_records - records_read);
+            } else {
+              // No repetition or definition levels
+              batch_size = std::min(num_records - records_read, batch_size);
+              records_read += ReadRecordData(batch_size);
+            });
+          }
+        }).then([&records_read]{
+          return seastar::make_ready_future<int64_t>(records_read);
+      });
+    });
   }
 
   // We may outwardly have the appearance of having exhausted a column chunk
@@ -2663,14 +2676,11 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
       null_count_ = 0;
     }
   }
-#endif
  protected:
-#if 0
   template <typename T>
   T* ValuesHead() {
     return reinterpret_cast<T*>(values_->mutable_data()) + values_written_;
   }
-#endif
 };
 
 class FLBARecordReader : public TypedRecordReader<FLBAType>,
