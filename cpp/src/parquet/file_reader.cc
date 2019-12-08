@@ -615,22 +615,22 @@ static constexpr int64_t kMaxDictHeaderSize = 100;
 RowGroupReader::RowGroupReader(std::unique_ptr<Contents> contents)
         : contents_(std::move(contents)) {}
 
-#if 0
-std::shared_ptr<ColumnReader> RowGroupReader::Column(int i) {
-    DCHECK(i < metadata()->num_columns())
-            << "The RowGroup only has " << metadata()->num_columns()
-            << "columns, requested column: " << i;
-    const ColumnDescriptor* descr = metadata()->schema()->Column(i);
+seastar::future<std::shared_ptr<ColumnReader>> RowGroupReader::Column(int i) {
+// TODO jacek42 logging42
+//    DCHECK(i < metadata()->num_columns())
+//            << "The RowGroup only has " << metadata()->num_columns()
+//            << "columns, requested column: " << i;
+  const ColumnDescriptor* descr = metadata()->schema()->Column(i);
 
-    std::unique_ptr<PageReader> page_reader = contents_->GetColumnPageReader(i);
+  return contents_->GetColumnPageReader(i).then([=](std::unique_ptr<PageReader> page_reader) {
     return ColumnReader::Make(
             descr, std::move(page_reader),
             const_cast<ReaderProperties*>(contents_->properties())->memory_pool());
+  });
 }
-#endif
 
 seastar::future<std::unique_ptr<PageReader>> RowGroupReader::GetColumnPageReader(int i) {
-// TODO42 jacek42 logging42
+// TODO jacek42 logging42
 //  DCHECK(i < metadata()->num_columns())
 //          << "The RowGroup only has " << metadata()->num_columns()
 //          << "columns, requested column: " << i;
@@ -685,7 +685,7 @@ public:
 //            col_length += padding;
 //        }
 
-        return properties_.GetStream(source_, col_start, col_length).then([=](std::shared_ptr<FutureInputStream> stream) {
+        return properties_.GetStream(source_, col_start, col_length).then([=, col = std::move(col)](std::shared_ptr<FutureInputStream> stream) {
             std::unique_ptr<ColumnCryptoMetaData> crypto_metadata = col->crypto_metadata();
 
             // Column is encrypted only if crypto_metadata exists.
@@ -741,20 +741,24 @@ private:
 // This class takes ownership of the provided data source
 class SerializedFile : public ParquetFileReader::Contents {
 public:
-#if 0
-    SerializedFile(const std::shared_ptr<ArrowInputFile>& source,
+
+
+    SerializedFile(const std::shared_ptr<RandomAccessFile>& source,
                    const ReaderProperties& props = default_reader_properties())
             : source_(source), properties_(props) {}
 
+#if 0
     ~SerializedFile() override {
         try {
             Close();
         } catch (...) {
         }
     }
-
-    void Close() override {
-        if (file_decryptor_) file_decryptor_->WipeOutDecryptionKeys();
+#endif
+    seastar::future<> Close() override {
+      // TODO jacek42 futurize
+      if (file_decryptor_) file_decryptor_->WipeOutDecryptionKeys();
+      return seastar::make_ready_future();
     }
 
     std::shared_ptr<RowGroupReader> GetRowGroup(int i) override {
@@ -769,72 +773,78 @@ public:
     void set_metadata(const std::shared_ptr<FileMetaData>& metadata) {
         file_metadata_ = metadata;
     }
-
-    void ParseMetaData() {
+#if 0
+    seastar::future<> ParseMetaData() {
         int64_t file_size = -1;
-        PARQUET_THROW_NOT_OK(source_->GetSize(&file_size));
+        return source_->GetSize(&file_size).then([=, this]{
+          if (file_size == 0) {
+            return seastar::make_exception_future(
+                    ParquetInvalidOrCorruptedFileException("Parquet file size is 0 bytes"));
+          } else if (file_size < kFooterSize) {
+            return seastar::make_exception_future(
+                    ParquetInvalidOrCorruptedFileException(
+                            "Parquet file size is ", file_size,
+                            " bytes, smaller than the minimum file footer (", kFooterSize, " bytes)"));
+          }
 
-        if (file_size == 0) {
-            throw ParquetInvalidOrCorruptedFileException("Parquet file size is 0 bytes");
-        } else if (file_size < kFooterSize) {
-            throw ParquetInvalidOrCorruptedFileException(
-                    "Parquet file size is ", file_size,
-                    " bytes, smaller than the minimum file footer (", kFooterSize, " bytes)");
-        }
+          std::shared_ptr<Buffer> footer_buffer;
+          int64_t footer_read_size = std::min(file_size, kDefaultFooterReadSize);
 
-        std::shared_ptr<Buffer> footer_buffer;
-        int64_t footer_read_size = std::min(file_size, kDefaultFooterReadSize);
-        PARQUET_THROW_NOT_OK(
-                source_->ReadAt(file_size - footer_read_size, footer_read_size, &footer_buffer));
-
-        // Check if all bytes are read. Check if last 4 bytes read have the magic bits
-        if (footer_buffer->size() != footer_read_size ||
-            (memcmp(footer_buffer->data() + footer_read_size - 4, kParquetMagic, 4) != 0 &&
-             memcmp(footer_buffer->data() + footer_read_size - 4, kParquetEMagic, 4) != 0)) {
-            throw ParquetInvalidOrCorruptedFileException(
-                    "Parquet magic bytes not found in footer. Either the file is corrupted or this "
-                    "is not a parquet file.");
-        }
-
-        if (memcmp(footer_buffer->data() + footer_read_size - 4, kParquetEMagic, 4) == 0) {
-            // Encrypted file with Encrypted footer.
-            ParseMetaDataOfEncryptedFileWithEncryptedFooter(footer_buffer, footer_read_size,
-                                                            file_size);
-            return;
-        }
-
-        // No encryption or encryption with plaintext footer mode.
-        std::shared_ptr<Buffer> metadata_buffer;
-        uint32_t metadata_len, read_metadata_len;
-        ParseUnencryptedFileMetadata(footer_buffer, footer_read_size, file_size,
-                                     &metadata_buffer, &metadata_len, &read_metadata_len);
-
-        auto file_decryption_properties = properties_.file_decryption_properties();
-        if (!file_metadata_->is_encryption_algorithm_set()) {  // Non encrypted file.
-            if (file_decryption_properties != nullptr) {
-                if (!file_decryption_properties->plaintext_files_allowed()) {
-                    throw ParquetException("Applying decryption properties on plaintext file");
-                }
+          return source_->ReadAt(file_size - footer_read_size, footer_read_size, &footer_buffer).then([=] {
+            // Check if all bytes are read. Check if last 4 bytes read have the magic bits
+            if (footer_buffer->size() != footer_read_size ||
+                (memcmp(footer_buffer->data() + footer_read_size - 4, kParquetMagic, 4) != 0 &&
+                 memcmp(footer_buffer->data() + footer_read_size - 4, kParquetEMagic, 4) != 0)) {
+              return seastar::make_exception_future(
+                      ParquetInvalidOrCorruptedFileException(
+                      "Parquet magic bytes not found in footer. Either the file is corrupted or this "
+                      "is not a parquet file."));
             }
-        } else {
-            // Encrypted file with plaintext footer mode.
-            ParseMetaDataOfEncryptedFileWithPlaintextFooter(
-                    file_decryption_properties, metadata_buffer, metadata_len, read_metadata_len);
-        }
+
+            if (memcmp(footer_buffer->data() + footer_read_size - 4, kParquetEMagic, 4) == 0) {
+              // Encrypted file with Encrypted footer.
+              ParseMetaDataOfEncryptedFileWithEncryptedFooter(footer_buffer, footer_read_size,
+                      file_size);
+              return seastar::make_ready_future();
+            }
+
+            // No encryption or encryption with plaintext footer mode.
+            std::shared_ptr<Buffer> metadata_buffer;
+            uint32_t metadata_len, read_metadata_len;
+            ParseUnencryptedFileMetadata(footer_buffer, footer_read_size, file_size,
+                                         &metadata_buffer, &metadata_len, &read_metadata_len);
+
+            auto file_decryption_properties = properties_.file_decryption_properties();
+            if (!file_metadata_->is_encryption_algorithm_set()) {  // Non encrypted file.
+              if (file_decryption_properties != nullptr) {
+                if (!file_decryption_properties->plaintext_files_allowed()) {
+                  return seastar::make_exception_future(
+                          ParquetException("Applying decryption properties on plaintext file"));
+                }
+              }
+            } else {
+              // Encrypted file with plaintext footer mode.
+              ParseMetaDataOfEncryptedFileWithPlaintextFooter(
+                      file_decryption_properties, metadata_buffer, metadata_len, read_metadata_len);
+              return seastar::make_ready_future();
+            }
+            return seastar::make_ready_future();
+          });
+        });
     }
 #endif
 private:
-    std::shared_ptr<ArrowInputFile> source_;
+    std::shared_ptr<RandomAccessFile> source_;
     std::shared_ptr<FileMetaData> file_metadata_;
     ReaderProperties properties_;
 
     std::unique_ptr<InternalFileDecryptor> file_decryptor_;
-#if 0
-    void ParseUnencryptedFileMetadata(const std::shared_ptr<Buffer>& footer_buffer,
+
+    seastar::future<> ParseUnencryptedFileMetadata(const std::shared_ptr<Buffer>& footer_buffer,
                                       int64_t footer_read_size, int64_t file_size,
                                       std::shared_ptr<Buffer>* metadata_buffer,
                                       uint32_t* metadata_len, uint32_t* read_metadata_len);
-
+#if 0
     std::string HandleAadPrefix(FileDecryptionProperties* file_decryption_properties,
                                 EncryptionAlgorithm& algo);
 
@@ -849,8 +859,8 @@ private:
 #endif
 };
 
-#if 0
-void SerializedFile::ParseUnencryptedFileMetadata(
+
+seastar::future<> SerializedFile::ParseUnencryptedFileMetadata(
         const std::shared_ptr<Buffer>& footer_buffer, int64_t footer_read_size,
         int64_t file_size, std::shared_ptr<Buffer>* metadata_buffer, uint32_t* metadata_len,
         uint32_t* read_metadata_len) {
@@ -859,28 +869,40 @@ void SerializedFile::ParseUnencryptedFileMetadata(
             kFooterSize);
     int64_t metadata_start = file_size - kFooterSize - *metadata_len;
     if (kFooterSize + *metadata_len > file_size) {
-        throw ParquetInvalidOrCorruptedFileException(
-                "Parquet file size is ", file_size,
-                " bytes, smaller than the size reported by metadata (", metadata_len, "bytes)");
+       // TODO jacek42 exception
+//      return seastar::make_exception_future(
+//              ParquetInvalidOrCorruptedFileException(
+//                      "Parquet file size is ", file_size,
+//                      " bytes, smaller than the size reported by metadata (", metadata_len, "bytes)"));
+      throw ParquetInvalidOrCorruptedFileException(
+              "Parquet file size is ", file_size,
+              " bytes, smaller than the size reported by metadata (", metadata_len, "bytes)");
     }
 
     // Check if the footer_buffer contains the entire metadata
     if (footer_read_size >= (*metadata_len + kFooterSize)) {
         *metadata_buffer = SliceBuffer(
                 footer_buffer, footer_read_size - *metadata_len - kFooterSize, *metadata_len);
-    } else {
-        PARQUET_THROW_NOT_OK(source_->ReadAt(metadata_start, *metadata_len, metadata_buffer));
-        if ((*metadata_buffer)->size() != *metadata_len) {
-            throw ParquetException("Failed reading metadata buffer (requested " +
-                                   std::to_string(*metadata_len) + " bytes but got " +
-                                   std::to_string((*metadata_buffer)->size()) + " bytes)");
-        }
-    }
+      *read_metadata_len = *metadata_len;
+      file_metadata_ = FileMetaData::Make((*metadata_buffer)->data(), read_metadata_len);
+      return seastar::make_ready_future();
 
-    *read_metadata_len = *metadata_len;
-    file_metadata_ = FileMetaData::Make((*metadata_buffer)->data(), read_metadata_len);
+    } else {
+        return source_->ReadAt(metadata_start, *metadata_len, metadata_buffer).then([=] {
+          if ((*metadata_buffer)->size() != *metadata_len) {
+            return seastar::make_exception_future(
+                    ParquetException("Failed reading metadata buffer (requested " +
+                                   std::to_string(*metadata_len) + " bytes but got " +
+                                   std::to_string((*metadata_buffer)->size()) + " bytes)"));
+          }
+          *read_metadata_len = *metadata_len;
+          file_metadata_ = FileMetaData::Make((*metadata_buffer)->data(), read_metadata_len);
+          return seastar::make_ready_future();
+        });
+    }
 }
 
+#if 0
 void SerializedFile::ParseMetaDataOfEncryptedFileWithEncryptedFooter(
         const std::shared_ptr<Buffer>& footer_buffer, int64_t footer_read_size,
         int64_t file_size) {

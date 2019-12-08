@@ -173,11 +173,11 @@ class FileFutureInputStream : public FutureInputStream {
   }
 };
 
-class RandomAccessFile : public FutureInputStream {
+class RandomAccessFile : public FileFutureInputStream {
 /// Modelled after ArrowInputFile
   public:
     /// Necessary because we hold a std::unique_ptr
-    ~RandomAccessFile() override;
+    ~RandomAccessFile() override {};
 
     /// \brief Create an isolated InputStream that reads a segment of a
     /// RandomAccessFile. Multiple such stream can be created and used
@@ -187,9 +187,15 @@ class RandomAccessFile : public FutureInputStream {
     /// \param[in] nbytes the extent of bytes to read. The file should have
     /// sufficient bytes available
     static std::shared_ptr<FutureInputStream> GetStream(std::shared_ptr<RandomAccessFile> file,
-                                                  int64_t file_offset, int64_t nbytes);
+                                                  int64_t file_offset, int64_t nbytes) {
+      //TODO jacek42
+      return nullptr;
+    };
 
-    virtual seastar::future<> GetSize(int64_t* size) = 0;
+    virtual seastar::future<> GetSize(int64_t* size) {
+      //TODO jacek42
+      return seastar::make_ready_future();
+    }
 
     /// \brief Read nbytes at position, provide default implementations using
     /// Read(...), but can be overridden. The default implementation is
@@ -201,7 +207,10 @@ class RandomAccessFile : public FutureInputStream {
     /// \param[out] bytes_read The number of bytes read
     /// \param[out] out The buffer to read bytes into
     /// \return Status
-    virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read, void* out);
+    virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read, void* out) {
+      //TODO jacek42
+      return seastar::make_ready_future();
+    };
 
     /// \brief Read nbytes at position, provide default implementations using
     /// Read(...), but can be overridden. The default implementation is
@@ -212,10 +221,21 @@ class RandomAccessFile : public FutureInputStream {
     /// \param[in] nbytes The number of bytes to read
     /// \param[out] out The buffer to read bytes into. The number of bytes read can be
     /// retrieved by calling Buffer::size().
-    virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out);
+    virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out) {
+      //TODO jacek42
+      return seastar::make_ready_future();
+    };
 
-    /// See interfaces.h/Seekable
-    virtual seastar::future<> Seek(int64_t position) = 0;
+    /// Because of interfaces.h/Seekable
+    virtual seastar::future<> Seek(int64_t position) {
+      //TODO jacek42
+      return seastar::make_ready_future();
+    }
+
+    // Because of Memory/BufferReader
+//    explicit RandomAccessFile(const std::shared_ptr<Buffer>& buffer);
+//    explicit RandomAccessFile(const Buffer& buffer);
+//    RandomAccessFile(const uint8_t* data, int64_t size);
 
     protected:
       RandomAccessFile();
