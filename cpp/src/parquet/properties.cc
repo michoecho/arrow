@@ -85,7 +85,7 @@ seastar::future<std::shared_ptr<seastarized::FutureInputStream>> ReaderPropertie
       std::stringstream ss;
       ss << "Tried reading " << num_bytes << " bytes starting at position " << start
          << " from file but only got " << data->size();
-      throw ParquetException(ss.str());
+      return seastar::make_exception_future(ParquetException(ss.str()));
     }
   }).then([data]{
     return std::make_shared<seastarized::FutureInputStream>(data);
