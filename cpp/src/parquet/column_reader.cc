@@ -2323,11 +2323,11 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     rep_levels_ = AllocateBuffer(pool);
     Reset();
   }
-
+#endif 
   int64_t available_values_current_page() const {
     return this->num_buffered_values_ - this->num_decoded_values_;
   }
-#endif 
+  
   seastar::future<int64_t> ReadRecords(int64_t num_records) override {
     // Delimit records, then read values at the end
     int64_t records_read = 0;
@@ -2489,7 +2489,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     ReserveLevels(capacity);
     ReserveValues(capacity);
   }
-
+#endif
   void ReserveLevels(int64_t capacity) {
     if (this->max_def_level_ > 0 && (levels_written_ + capacity > levels_capacity_)) {
       int64_t new_levels_capacity = BitUtil::NextPower2(levels_capacity_ + 1);
@@ -2505,7 +2505,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
       levels_capacity_ = new_levels_capacity;
     }
   }
-
+#if 0
   void ReserveValues(int64_t capacity) {
     if (values_written_ + capacity > values_capacity_) {
       int64_t new_values_capacity = BitUtil::NextPower2(values_capacity_ + 1);
@@ -2592,7 +2592,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
         this->current_decoder_->Decode(ValuesHead<T>(), static_cast<int>(values_to_read));
     DCHECK_EQ(num_decoded, values_to_read);
   }
-
+#endif
   // Return number of logical records read
   int64_t ReadRecordData(int64_t num_records) {
     // Conservative upper bound
@@ -2642,7 +2642,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
 
     return records_read;
   }
-
+#if 0
   void DebugPrintState() override {
     const int16_t* def_levels = this->def_levels();
     const int16_t* rep_levels = this->rep_levels();
