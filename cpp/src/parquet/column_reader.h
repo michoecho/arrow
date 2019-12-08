@@ -408,11 +408,11 @@ class PARQUET_EXPORT PageReader {
 class PARQUET_EXPORT ColumnReader {
  public:
   virtual ~ColumnReader() = default;
-#if 0
+
   static std::shared_ptr<ColumnReader> Make(
       const ColumnDescriptor* descr, std::unique_ptr<PageReader> pager,
       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
-
+#if 0
   // Returns true if there are still values in this column.
   virtual bool HasNext() = 0;
 
@@ -511,6 +511,7 @@ class RecordReader {
   /// \brief Attempt to read indicated number of records from column chunk
   /// \return number of records read
   virtual int64_t ReadRecords(int64_t num_records) = 0;
+  //virtual seastar::future<int64_t> ReadRecords(int64_t num_records) = 0;
 #if 0
   /// \brief Pre-allocate space for data. Results in better flat read performance
   virtual void Reserve(int64_t num_values) = 0;

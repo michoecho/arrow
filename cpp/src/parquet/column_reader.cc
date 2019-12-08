@@ -2304,7 +2304,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
   using BASE = ColumnReaderImplBase<DType>;
 #if 0
   TypedRecordReader(const ColumnDescriptor* descr, MemoryPool* pool) : BASE(descr, pool) {
-    nullable_values_ = internal::HasSpacedValues(descr);
+    nullable_values_ = ::parquet::internal::HasSpacedValues(descr);
     at_record_start_ = true;
     records_read_ = 0;
     values_written_ = 0;
