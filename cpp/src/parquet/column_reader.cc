@@ -1811,9 +1811,8 @@ class ColumnReaderImplBase {
     // exhausted
     if (num_buffered_values_ == 0 || num_decoded_values_ == num_buffered_values_) {
       return ReadNewPage().then([this](bool new_page_read){
-        if (!new_page_read || num_buffered_values_ == 0) {
-          return seastar::make_ready_future<bool>(false);
-        }
+        bool cond = !new_page_read || num_buffered_values_ == 0;
+        return seastar::make_ready_future<bool>(!cond);
       });
     }
     return seastar::make_ready_future<bool>(true);
@@ -2064,7 +2063,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_s
                                                 int16_t* rep_levels, T* values,
                                                 int64_t* values_read) {
   // HasNext invokes ReadNewPage
-  return HasNext().then([=] (bool has_next){
+  return HasNext().then([=] (bool has_next) mutable {
     if (!has_next){
       return seastar::make_ready_future<int64_t>(0);
     }
@@ -2105,7 +2104,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_s
     int64_t total_values = std::max(num_def_levels, *values_read);
     this->ConsumeBufferedValues(total_values);
 
-    return total_values;
+    return seastar::make_ready_future<int64_t>(total_values);
   });
 }
 
@@ -2116,7 +2115,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::ReadBatchSpaced(
     int64_t* values_read, int64_t* null_count_out) {
   // HasNext invokes ReadNewPage
 
-  return HasNext().then([=] (bool has_next){
+  return HasNext().then([=] (bool has_next) mutable {
     if (!has_next){
       *levels_read = 0;
       *values_read = 0;
@@ -2188,7 +2187,7 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_
   int64_t values_read;
   bool has_next = true;
   
-  return do_with(std::move(rows_to_skip), std::move(values_read), std::move(has_next),
+  return seastar::do_with(std::move(rows_to_skip), std::move(values_read), std::move(has_next),
     [this, num_rows_to_skip](auto &rows_to_skip, auto &values_read, auto &has_next){
       return seastar::do_until(
         [&has_next, &rows_to_skip]{
@@ -2238,16 +2237,15 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_
                 }
               });
             }
-        }).then([num_rows_to_skip, &rows_to_skip]{
-          return seastar::make_ready_future(num_rows_to_skip - rows_to_skip);
         });
+      }).then([num_rows_to_skip, rows_to_skip]{
+          return seastar::make_ready_future<int64_t>(num_rows_to_skip - rows_to_skip);
       });
   });
 }
 
 // ----------------------------------------------------------------------
 // Dynamic column reader constructor
-#if 0
 std::shared_ptr<ColumnReader> ColumnReader::Make(const ColumnDescriptor* descr,
                                                  std::unique_ptr<PageReader> pager,
                                                  MemoryPool* pool) {
@@ -2282,7 +2280,6 @@ std::shared_ptr<ColumnReader> ColumnReader::Make(const ColumnDescriptor* descr,
   // Unreachable code, but supress compiler warning
   return std::shared_ptr<ColumnReader>(nullptr);
 }
-#endif
 
 // ----------------------------------------------------------------------
 // RecordReader
@@ -2860,7 +2857,6 @@ void TypedRecordReader<ByteArrayType>::DebugPrintState() {}
 
 template <>
 void TypedRecordReader<FLBAType>::DebugPrintState() {}
-
 #if 0
 std::shared_ptr<RecordReader> MakeByteArrayRecordReader(const ColumnDescriptor* descr,
                                                         arrow::MemoryPool* pool,
@@ -2906,5 +2902,7 @@ std::shared_ptr<RecordReader> RecordReader::Make(const ColumnDescriptor* descr,
 }
 #endif
 }  // namespace internal
+
 }  // namespace seastarized
+
 }  // namespace parquet
