@@ -149,25 +149,23 @@ class PARQUET_EXPORT RowGroupReader{
     // easily create test fixtures
     // An implementation of the Contents class is defined in the .cc file
     struct Contents {
-#if 0
       virtual ~Contents() {}
-      virtual std::unique_ptr<PageReader> GetColumnPageReader(int i) = 0;
+      virtual seastar::future<std::unique_ptr<PageReader>> GetColumnPageReader(int i) = 0;
       virtual const RowGroupMetaData* metadata() const = 0;
       virtual const ReaderProperties* properties() const = 0;
-#endif
     };
-#if 0
+
     explicit RowGroupReader(std::unique_ptr<Contents> contents);
 
     // Returns the rowgroup metadata
     const RowGroupMetaData* metadata() const;
-
+#if 0
     // Construct a ColumnReader for the indicated row group-relative
     // column. Ownership is shared with the RowGroupReader.
     std::shared_ptr<ColumnReader> Column(int i);
-
-    std::unique_ptr<PageReader> GetColumnPageReader(int i);
 #endif
+    seastar::future<std::unique_ptr<PageReader>> GetColumnPageReader(int i);
+
     private:
     // Holds a pointer to an instance of Contents implementation
     std::unique_ptr<Contents> contents_;
