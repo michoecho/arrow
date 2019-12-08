@@ -159,11 +159,11 @@ class PARQUET_EXPORT RowGroupReader{
 
     // Returns the rowgroup metadata
     const RowGroupMetaData* metadata() const;
-#if 0
+
     // Construct a ColumnReader for the indicated row group-relative
     // column. Ownership is shared with the RowGroupReader.
-    std::shared_ptr<ColumnReader> Column(int i);
-#endif
+    seastar::future<std::shared_ptr<ColumnReader>> Column(int i);
+
     seastar::future<std::unique_ptr<PageReader>> GetColumnPageReader(int i);
 
     private:
@@ -177,7 +177,6 @@ class PARQUET_EXPORT ParquetFileReader {
         // easily create test fixtures
         // An implementation of the Contents class is defined in the .cc file
         struct PARQUET_EXPORT Contents {
-#if 0
             static std::unique_ptr<Contents> Open(
                     const std::shared_ptr<::arrow::io::RandomAccessFile>& source,
                     const ReaderProperties& props = default_reader_properties(),
@@ -185,10 +184,9 @@ class PARQUET_EXPORT ParquetFileReader {
 
             virtual ~Contents() = default;
             // Perform any cleanup associated with the file contents
-            virtual void Close() = 0;
+            virtual seastar::future<> Close() = 0;
             virtual std::shared_ptr<RowGroupReader> GetRowGroup(int i) = 0;
             virtual std::shared_ptr<FileMetaData> metadata() const = 0;
-#endif
         };
 #if 0
         ParquetFileReader();
