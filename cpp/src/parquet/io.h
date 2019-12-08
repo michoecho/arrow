@@ -220,6 +220,5 @@ class RandomAccessFile : public FutureInputStream {
     protected:
       RandomAccessFile();
 };
-};
 
 } // namespace parquet::seastarized
