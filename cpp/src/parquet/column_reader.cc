@@ -2328,8 +2328,6 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
     return this->num_buffered_values_ - this->num_decoded_values_;
   }
 #endif 
-  int64_t ReadRecords(int64_t num_records) override { return 0; }
-#if 0
   seastar::future<int64_t> ReadRecords(int64_t num_records) override {
     // Delimit records, then read values at the end
     int64_t records_read = 0;
@@ -2343,7 +2341,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
       return seastar::future<int64_t>(0); 
     }
 
-    int64_t level_batch_size = std::max(kMinLevelBatchSize, num_records);
+    int64_t level_batch_size = std::max(::parquet::internal::kMinLevelBatchSize, num_records);
     
     return seastar::do_with(std::move(records_read), std::move(break_loop),
       [this, num_records, level_batch_size] (auto &records_read, auto &break_loop) {
@@ -2354,7 +2352,7 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
         [this, &break_loop, &records_read, num_records] {
           return !break_loop && (!at_record_start_ || records_read < num_records);
         },
-        [=, &break_loop, &records_read] mutable {
+        [=, &break_loop, &records_read] () mutable {
           return this->HasNextInternal().then([=, &break_loop, &records_read](auto &has_next){
             // Is there more data to read in this row group?
             if (!has_next) {
@@ -2375,7 +2373,8 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
 
             // No more data in column
             if (batch_size == 0) {
-              break;
+              break_loop = true;
+              return seastar::make_ready_future<>();
             }
 
             if (this->max_def_level_ > 0) {
@@ -2397,7 +2396,8 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
 
               // Exhausted column chunk
               if (levels_read == 0) {
-                break;
+                break_loop = true;
+                return seastar::make_ready_future<>();
               }
 
               levels_written_ += levels_read;
@@ -2406,14 +2406,15 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
               // No repetition or definition levels
               batch_size = std::min(num_records - records_read, batch_size);
               records_read += ReadRecordData(batch_size);
-            });
-          }
+            }
+            return seastar::make_ready_future<>();
+          });
         }).then([&records_read]{
           return seastar::make_ready_future<int64_t>(records_read);
       });
     });
   }
-
+#if 0
   // We may outwardly have the appearance of having exhausted a column chunk
   // when in fact we are in the middle of processing the last batch
   bool has_values_to_process() const { return levels_position_ < levels_written_; }
@@ -2682,12 +2683,10 @@ class TypedRecordReader : public ColumnReaderImplBase<DType>,
   }
 #endif
  protected:
-#if 0
   template <typename T>
   T* ValuesHead() {
     return reinterpret_cast<T*>(values_->mutable_data()) + values_written_;
   }
-#endif
 };
 
 class FLBARecordReader : public TypedRecordReader<FLBAType>,
