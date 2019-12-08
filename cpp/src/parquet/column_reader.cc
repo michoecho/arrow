@@ -2857,7 +2857,7 @@ void TypedRecordReader<ByteArrayType>::DebugPrintState() {}
 
 template <>
 void TypedRecordReader<FLBAType>::DebugPrintState() {}
-#if 0
+
 std::shared_ptr<RecordReader> MakeByteArrayRecordReader(const ColumnDescriptor* descr,
                                                         arrow::MemoryPool* pool,
                                                         bool read_dictionary) {
@@ -2867,9 +2867,7 @@ std::shared_ptr<RecordReader> MakeByteArrayRecordReader(const ColumnDescriptor* 
     return std::make_shared<ByteArrayChunkedRecordReader>(descr, pool);
   }
 }
-#endif
 
-#if 0
 std::shared_ptr<RecordReader> RecordReader::Make(const ColumnDescriptor* descr,
                                                  MemoryPool* pool,
                                                  const bool read_dictionary) {
@@ -2900,7 +2898,7 @@ std::shared_ptr<RecordReader> RecordReader::Make(const ColumnDescriptor* descr,
   // Unreachable code, but supress compiler warning
   return nullptr;
 }
-#endif
+
 }  // namespace internal
 
 }  // namespace seastarized
