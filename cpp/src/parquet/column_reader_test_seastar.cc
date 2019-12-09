@@ -74,20 +74,21 @@ static inline bool vector_equal_with_def_levels(const std::vector<T>& left,
 class TestPrimitiveReader : public ::testing::Test {
  public:
   void InitReader(const ColumnDescriptor* d) {
-    std::unique_ptr<PageReader> pager_;
-    pager_.reset(new test::MockPageReader(pages_));
-    reader_ = ColumnReader::Make(d, std::move(pager_));
+    std::unique_ptr<seastarized::PageReader> pager_;
+    pager_.reset(new seastarized::test::MockPageReader(pages_));
+    reader_ = seastarized::ColumnReader::Make(d, std::move(pager_));
   }
 
   void CheckResults() {
     std::vector<int32_t> vresult(num_values_, -1);
     std::vector<int16_t> dresult(num_levels_, -1);
+
     std::vector<int16_t> rresult(num_levels_, -1);
     int64_t values_read = 0;
     int total_values_read = 0;
     int batch_actual = 0;
 
-    Int32Reader* reader = static_cast<Int32Reader*>(reader_.get());
+    seastarized::Int32Reader* reader = static_cast<seastarized::Int32Reader*>(reader_.get());
     int32_t batch_size = 8;
     int batch = 0;
     // This will cover both the cases
@@ -96,7 +97,7 @@ class TestPrimitiveReader : public ::testing::Test {
     do {
       batch = static_cast<int>(reader->ReadBatch(
           batch_size, &dresult[0] + batch_actual, &rresult[0] + batch_actual,
-          &vresult[0] + total_values_read, &values_read));
+          &vresult[0] + total_values_read, &values_read).get0());
       total_values_read += static_cast<int>(values_read);
       batch_actual += batch;
       batch_size = std::min(1 << 24, std::max(batch_size * 2, 4096));
@@ -113,7 +114,7 @@ class TestPrimitiveReader : public ::testing::Test {
     }
     // catch improper writes at EOS
     batch_actual =
-        static_cast<int>(reader->ReadBatch(5, nullptr, nullptr, nullptr, &values_read));
+        static_cast<int>(reader->ReadBatch(5, nullptr, nullptr, nullptr, &values_read).get0());
     ASSERT_EQ(0, batch_actual);
     ASSERT_EQ(0, values_read);
   }
@@ -130,7 +131,7 @@ class TestPrimitiveReader : public ::testing::Test {
     int64_t levels_read = 0;
     int64_t values_read;
 
-    Int32Reader* reader = static_cast<Int32Reader*>(reader_.get());
+    seastarized::Int32Reader* reader = static_cast<seastarized::Int32Reader*>(reader_.get());
     int32_t batch_size = 8;
     int batch = 0;
     // This will cover both the cases
@@ -140,7 +141,7 @@ class TestPrimitiveReader : public ::testing::Test {
       batch = static_cast<int>(reader->ReadBatchSpaced(
           batch_size, dresult.data() + levels_actual, rresult.data() + levels_actual,
           vresult.data() + batch_actual, valid_bits.data() + batch_actual, 0,
-          &levels_read, &values_read, &null_count));
+          &levels_read, &values_read, &null_count).get0());
       total_values_read += batch - static_cast<int>(null_count);
       batch_actual += batch;
       levels_actual += static_cast<int>(levels_read);
@@ -162,7 +163,7 @@ class TestPrimitiveReader : public ::testing::Test {
     // catch improper writes at EOS
     batch_actual = static_cast<int>(
         reader->ReadBatchSpaced(5, nullptr, nullptr, nullptr, valid_bits.data(), 0,
-                                &levels_read, &values_read, &null_count));
+                                &levels_read, &values_read, &null_count).get0());
     ASSERT_EQ(0, batch_actual);
     ASSERT_EQ(0, null_count);
   }
@@ -217,7 +218,7 @@ class TestPrimitiveReader : public ::testing::Test {
   int16_t max_def_level_;
   int16_t max_rep_level_;
   std::vector<std::shared_ptr<Page>> pages_;
-  std::shared_ptr<ColumnReader> reader_;
+  std::shared_ptr<seastarized::ColumnReader> reader_;
   std::vector<int32_t> values_;
   std::vector<int16_t> def_levels_;
   std::vector<int16_t> rep_levels_;
@@ -271,27 +272,27 @@ TEST_F(TestPrimitiveReader, TestInt32FlatRequiredSkip) {
   std::vector<int16_t> dresult(levels_per_page / 2, -1);
   std::vector<int16_t> rresult(levels_per_page / 2, -1);
 
-  Int32Reader* reader = static_cast<Int32Reader*>(reader_.get());
+  seastarized::Int32Reader* reader = static_cast<seastarized::Int32Reader*>(reader_.get());
   int64_t values_read = 0;
 
   // 1) skip_size > page_size (multiple pages skipped)
   // Skip first 2 pages
-  int64_t levels_skipped = reader->Skip(2 * levels_per_page);
+  int64_t levels_skipped = reader->Skip(2 * levels_per_page).get0();
   ASSERT_EQ(2 * levels_per_page, levels_skipped);
   // Read half a page
   reader->ReadBatch(levels_per_page / 2, dresult.data(), rresult.data(), vresult.data(),
-                    &values_read);
+                    &values_read).get0();
   std::vector<int32_t> sub_values(
       values_.begin() + 2 * levels_per_page,
       values_.begin() + static_cast<int>(2.5 * static_cast<double>(levels_per_page)));
   ASSERT_TRUE(vector_equal(sub_values, vresult));
 
   // 2) skip_size == page_size (skip across two pages)
-  levels_skipped = reader->Skip(levels_per_page);
+  levels_skipped = reader->Skip(levels_per_page).get0();
   ASSERT_EQ(levels_per_page, levels_skipped);
   // Read half a page
   reader->ReadBatch(levels_per_page / 2, dresult.data(), rresult.data(), vresult.data(),
-                    &values_read);
+                    &values_read).get0();
   sub_values.clear();
   sub_values.insert(
       sub_values.end(),
@@ -301,11 +302,11 @@ TEST_F(TestPrimitiveReader, TestInt32FlatRequiredSkip) {
 
   // 3) skip_size < page_size (skip limited to a single page)
   // Skip half a page
-  levels_skipped = reader->Skip(levels_per_page / 2);
+  levels_skipped = reader->Skip(levels_per_page / 2).get0();
   ASSERT_EQ(0.5 * levels_per_page, levels_skipped);
   // Read half a page
   reader->ReadBatch(levels_per_page / 2, dresult.data(), rresult.data(), vresult.data(),
-                    &values_read);
+                    &values_read).get0();
   sub_values.clear();
   sub_values.insert(
       sub_values.end(),
@@ -326,6 +327,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   NodePtr type = schema::Int32("a", Repetition::REQUIRED);
   const ColumnDescriptor descr(type, max_def_level_, max_rep_level_);
   std::shared_ptr<ResizableBuffer> dummy = AllocateBuffer();
+  seastar::future<bool> test_future = seastar::make_ready_future<bool>(false);
 
   std::shared_ptr<DictionaryPage> dict_page =
       std::make_shared<DictionaryPage>(dummy, 0, Encoding::PLAIN);
@@ -335,7 +337,9 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   pages_.push_back(data_page);
   InitReader(&descr);
   // Tests Dict : PLAIN, Data : RLE_DICTIONARY
-  ASSERT_NO_THROW(reader_->HasNext());
+  test_future = reader_->HasNext();
+  test_future.wait();
+  ASSERT_TRUE(!test_future.failed());
   pages_.clear();
 
   dict_page = std::make_shared<DictionaryPage>(dummy, 0, Encoding::PLAIN_DICTIONARY);
@@ -345,7 +349,9 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   pages_.push_back(data_page);
   InitReader(&descr);
   // Tests Dict : PLAIN_DICTIONARY, Data : PLAIN_DICTIONARY
-  ASSERT_NO_THROW(reader_->HasNext());
+  test_future = reader_->HasNext();
+  test_future.wait();
+  ASSERT_TRUE(!test_future.failed());
   pages_.clear();
 
   data_page = MakeDataPage<Int32Type>(&descr, {}, 0, Encoding::RLE_DICTIONARY, {}, 0, {},
@@ -353,14 +359,18 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   pages_.push_back(data_page);
   InitReader(&descr);
   // Tests dictionary page must occur before data page
-  ASSERT_THROW(reader_->HasNext(), ParquetException);
+  test_future = reader_->HasNext();
+  test_future.wait();
+  ASSERT_TRUE(test_future.failed());
   pages_.clear();
 
   dict_page = std::make_shared<DictionaryPage>(dummy, 0, Encoding::DELTA_BYTE_ARRAY);
   pages_.push_back(dict_page);
   InitReader(&descr);
   // Tests only RLE_DICTIONARY is supported
-  ASSERT_THROW(reader_->HasNext(), ParquetException);
+  test_future = reader_->HasNext();
+  test_future.wait();
+  ASSERT_TRUE(test_future.failed());
   pages_.clear();
 
   std::shared_ptr<DictionaryPage> dict_page1 =
@@ -371,7 +381,9 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   pages_.push_back(dict_page2);
   InitReader(&descr);
   // Column cannot have more than one dictionary
-  ASSERT_THROW(reader_->HasNext(), ParquetException);
+  test_future = reader_->HasNext();
+  test_future.wait();
+  ASSERT_TRUE(test_future.failed());
   pages_.clear();
 
   data_page = MakeDataPage<Int32Type>(&descr, {}, 0, Encoding::DELTA_BYTE_ARRAY, {}, 0,
@@ -379,7 +391,9 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   pages_.push_back(data_page);
   InitReader(&descr);
   // unsupported encoding
-  ASSERT_THROW(reader_->HasNext(), ParquetException);
+  test_future = reader_->HasNext();
+  test_future.wait();
+  ASSERT_TRUE(test_future.failed());
   pages_.clear();
 }
 

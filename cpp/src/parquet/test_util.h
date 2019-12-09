@@ -30,6 +30,8 @@
 #include <utility>
 #include <vector>
 
+#include <seastar/core/fstream.hh>
+
 #include <gtest/gtest.h>
 
 #include "arrow/testing/util.h"
@@ -707,4 +709,28 @@ inline void PrimitiveTypedTest<BooleanType>::GenerateData(int64_t num_values) {
 }
 
 }  // namespace test
+
+namespace seastarized::test {
+class MockPageReader : public PageReader {
+ public:
+  explicit MockPageReader(const std::vector<std::shared_ptr<Page>>& pages)
+      : pages_(pages), page_index_(0) {}
+
+  seastar::future<std::shared_ptr<Page>> NextPage() override {
+    if (page_index_ == static_cast<int>(pages_.size())) {
+      // EOS to consumer
+      return seastar::make_ready_future<std::shared_ptr<Page>>(nullptr);
+    }
+    return seastar::make_ready_future<std::shared_ptr<Page>>(pages_[page_index_++]);
+  }
+
+  // No-op
+  void set_max_page_header_size(uint32_t size) override {}
+
+ private:
+  std::vector<std::shared_ptr<Page>> pages_;
+  int page_index_;
+};
+
+}  // namespace seastarized::test
 }  // namespace parquet
