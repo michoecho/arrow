@@ -381,6 +381,12 @@ add_seastar_test(seastar-test-2
                  test_main.cc
                  test_util.cc)
 
+add_seastar_test(seastar-test-3
+                 SOURCES
+                 column_reader_test_seastar.cc
+                 test_main.cc
+                 test_util.cc)
+
 if(PARQUET_REQUIRE_ENCRYPTION)
   add_seastar_test(encryption-test
                    SOURCES
