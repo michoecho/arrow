@@ -2065,8 +2065,10 @@ seastar::future<int64_t> TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_s
   // HasNext invokes ReadNewPage
   return HasNext().then([=] (bool has_next) mutable {
     if (!has_next){
+      *values_read = 0;
       return seastar::make_ready_future<int64_t>(0);
     }
+    
     // TODO(wesm): keep reading data pages until batch_size is reached, or the
     // row group is finished
     batch_size =
@@ -2185,60 +2187,54 @@ template <typename DType>
 seastar::future<int64_t> TypedColumnReaderImpl<DType>::Skip(int64_t num_rows_to_skip) {
   int64_t rows_to_skip = num_rows_to_skip;
   int64_t values_read;
-  bool has_next = true;
   
-  return seastar::do_with(std::move(rows_to_skip), std::move(values_read), std::move(has_next),
-    [this, num_rows_to_skip](auto &rows_to_skip, auto &values_read, auto &has_next){
-      return seastar::do_until(
-        [&has_next, &rows_to_skip]{
-          return has_next && rows_to_skip > 0;
-        },
-        [this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] () mutable {
-          return HasNext().then([this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] (bool has_next_result) mutable {
-            has_next = has_next_result;
-            if (!has_next){
-              return seastar::make_ready_future<>();
-            } else{
-              return seastar::make_ready_future<>().then([this, &rows_to_skip, &values_read, &has_next, num_rows_to_skip] () mutable {
-                // If the number of rows to skip is more than the number of undecoded values, skip the
-                // Page.
-                if (rows_to_skip > (this->num_buffered_values_ - this->num_decoded_values_)) {
-                  rows_to_skip -= this->num_buffered_values_ - this->num_decoded_values_;
-                  this->num_decoded_values_ = this->num_buffered_values_;
-                  return seastar::make_ready_future<>();
-                } else {
-                  // We need to read this Page
-                  // Jump to the right offset in the Page
-                  int64_t batch_size = 1024;  // ReadBatch with a smaller memory footprint
-                  values_read = 0;
-
-                  // This will be enough scratch space to accommodate 16-bit levels or any
-                  // value type
-                  std::shared_ptr<ResizableBuffer> scratch = AllocateBuffer(
-                      this->pool_, batch_size * type_traits<DType::type_num>::value_byte_size);
-
-                  return seastar::do_until(
-                    [&values_read, &rows_to_skip]{
-                      return values_read > 0 && rows_to_skip > 0;
-                    },
-                    [=, &rows_to_skip, &values_read, &has_next] () mutable {
-                      batch_size = std::min(batch_size, rows_to_skip);
-                      return ReadBatch(static_cast<int>(batch_size),
-                                  reinterpret_cast<int16_t*>(scratch->mutable_data()),
-                                  reinterpret_cast<int16_t*>(scratch->mutable_data()),
-                                  reinterpret_cast<T*>(scratch->mutable_data()),
-                                  &values_read).then([&values_read, &rows_to_skip](int64_t batch_read){
-                                    values_read = batch_read;
-                                    rows_to_skip -= values_read;
-                                    return seastar::make_ready_future<>();
-                                  });
-                    }
-                  );
-                }
-              });
+  return seastar::do_with(std::move(rows_to_skip), std::move(values_read),
+    [this, num_rows_to_skip](auto &rows_to_skip, auto &values_read){
+      return seastar::repeat(
+        [this, &rows_to_skip, &values_read, num_rows_to_skip] () mutable {
+          return HasNext().then(
+            [this, &rows_to_skip, &values_read, num_rows_to_skip] (bool has_next) mutable {
+            if (!(has_next && rows_to_skip > 0)) {
+              return seastar::make_ready_future<seastar::stop_iteration>(seastar::stop_iteration::yes);
             }
+            // If the number of rows to skip is more than the number of undecoded values, skip the
+            // Page.
+            if (rows_to_skip > (this->num_buffered_values_ - this->num_decoded_values_)) {
+              rows_to_skip -= this->num_buffered_values_ - this->num_decoded_values_;
+              this->num_decoded_values_ = this->num_buffered_values_;
+              return seastar::make_ready_future<seastar::stop_iteration>(seastar::stop_iteration::no);
+            }
+            // We need to read this Page
+            // Jump to the right offset in the Page
+            int64_t batch_size = 1024;  // ReadBatch with a smaller memory footprint
+            values_read = 0;
+
+            // This will be enough scratch space to accommodate 16-bit levels or any
+            // value type
+            std::shared_ptr<ResizableBuffer> scratch = AllocateBuffer(
+                this->pool_, batch_size * type_traits<DType::type_num>::value_byte_size);
+
+            return seastar::repeat(
+              [=, &rows_to_skip, &values_read, &has_next] () mutable {
+                batch_size = std::min(batch_size, rows_to_skip);
+                return ReadBatch(static_cast<int>(batch_size),
+                            reinterpret_cast<int16_t*>(scratch->mutable_data()),
+                            reinterpret_cast<int16_t*>(scratch->mutable_data()),
+                            reinterpret_cast<T*>(scratch->mutable_data()),
+                            &values_read).then([&values_read, &rows_to_skip](int64_t batch_read){
+                              values_read = batch_read;
+                              rows_to_skip -= values_read;
+                              if (values_read > 0 && rows_to_skip > 0){
+                                return seastar::stop_iteration::no;
+                              }
+                              return seastar::stop_iteration::yes;
+                            });
+              }
+            ).then([]{
+              return seastar::stop_iteration::no;
+            });
         });
-      }).then([num_rows_to_skip, rows_to_skip]{
+      }).then([num_rows_to_skip, &rows_to_skip]{
           return seastar::make_ready_future<int64_t>(num_rows_to_skip - rows_to_skip);
       });
   });

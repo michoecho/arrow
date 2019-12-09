@@ -340,6 +340,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   test_future = reader_->HasNext();
   test_future.wait();
   ASSERT_TRUE(!test_future.failed());
+  test_future.ignore_ready_future();
   pages_.clear();
 
   dict_page = std::make_shared<DictionaryPage>(dummy, 0, Encoding::PLAIN_DICTIONARY);
@@ -352,6 +353,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   test_future = reader_->HasNext();
   test_future.wait();
   ASSERT_TRUE(!test_future.failed());
+  test_future.ignore_ready_future();
   pages_.clear();
 
   data_page = MakeDataPage<Int32Type>(&descr, {}, 0, Encoding::RLE_DICTIONARY, {}, 0, {},
@@ -362,6 +364,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   test_future = reader_->HasNext();
   test_future.wait();
   ASSERT_TRUE(test_future.failed());
+  test_future.ignore_ready_future();
   pages_.clear();
 
   dict_page = std::make_shared<DictionaryPage>(dummy, 0, Encoding::DELTA_BYTE_ARRAY);
@@ -371,6 +374,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   test_future = reader_->HasNext();
   test_future.wait();
   ASSERT_TRUE(test_future.failed());
+  test_future.ignore_ready_future();
   pages_.clear();
 
   std::shared_ptr<DictionaryPage> dict_page1 =
@@ -384,6 +388,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   test_future = reader_->HasNext();
   test_future.wait();
   ASSERT_TRUE(test_future.failed());
+  test_future.ignore_ready_future();
   pages_.clear();
 
   data_page = MakeDataPage<Int32Type>(&descr, {}, 0, Encoding::DELTA_BYTE_ARRAY, {}, 0,
@@ -394,6 +399,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   test_future = reader_->HasNext();
   test_future.wait();
   ASSERT_TRUE(test_future.failed());
+  test_future.ignore_ready_future();
   pages_.clear();
 }
 
