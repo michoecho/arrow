@@ -844,7 +844,7 @@ private:
                                       int64_t footer_read_size, int64_t file_size,
                                       std::shared_ptr<Buffer>* metadata_buffer,
                                       uint32_t* metadata_len, uint32_t* read_metadata_len);
-#if 0
+
     std::string HandleAadPrefix(FileDecryptionProperties* file_decryption_properties,
                                 EncryptionAlgorithm& algo);
 
@@ -856,7 +856,6 @@ private:
     void ParseMetaDataOfEncryptedFileWithEncryptedFooter(
             const std::shared_ptr<Buffer>& footer_buffer, int64_t footer_read_size,
             int64_t file_size);
-#endif
 };
 
 
@@ -902,7 +901,6 @@ seastar::future<> SerializedFile::ParseUnencryptedFileMetadata(
     }
 }
 
-#if 0
 void SerializedFile::ParseMetaDataOfEncryptedFileWithEncryptedFooter(
         const std::shared_ptr<Buffer>& footer_buffer, int64_t footer_read_size,
         int64_t file_size) {
@@ -1017,6 +1015,7 @@ std::string SerializedFile::HandleAadPrefix(
         aad_prefix = aad_prefix_in_file;
         std::shared_ptr<AADPrefixVerifier> aad_prefix_verifier =
                 file_decryption_properties->aad_prefix_verifier();
+        // TODO jacek42 is it 100% certain that it doesnt to IO?
         if (aad_prefix_verifier != nullptr) aad_prefix_verifier->Verify(aad_prefix);
     } else {
         if (!algo.aad.supply_aad_prefix && !aad_prefix_in_properties.empty()) {
@@ -1033,7 +1032,7 @@ std::string SerializedFile::HandleAadPrefix(
     }
     return aad_prefix + algo.aad.aad_file_unique;
 }
-#endif
+
 // ----------------------------------------------------------------------
 // ParquetFileReader public API
 #if 0
