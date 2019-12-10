@@ -609,6 +609,15 @@ class DictionaryRecordReader : virtual public RecordReader {
 
 }  // namespace internal
 
+using BoolReader = TypedColumnReader<BooleanType>;
+using Int32Reader = TypedColumnReader<Int32Type>;
+using Int64Reader = TypedColumnReader<Int64Type>;
+using Int96Reader = TypedColumnReader<Int96Type>;
+using FloatReader = TypedColumnReader<FloatType>;
+using DoubleReader = TypedColumnReader<DoubleType>;
+using ByteArrayReader = TypedColumnReader<ByteArrayType>;
+using FixedLenByteArrayReader = TypedColumnReader<FLBAType>;
+
 }  // namespace seastarized
 
 }  // namespace parquet
