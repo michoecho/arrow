@@ -17,6 +17,8 @@
 
 #include "parquet/file_reader.h"
 
+#include <boost/iterator/counting_iterator.hpp>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -1139,63 +1141,67 @@ seastar::future<std::shared_ptr<FileMetaData>> ReadMetaData(
     });
 }
 
-#if 0
 // ----------------------------------------------------------------------
 // File scanner for performance testing
-int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
+seastar::future<int64_t> ScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
                          ParquetFileReader* reader) {
-    std::vector<int16_t> rep_levels(column_batch_size);
-    std::vector<int16_t> def_levels(column_batch_size);
+  std::vector<int16_t> rep_levels(column_batch_size);
+  std::vector<int16_t> def_levels(column_batch_size);
 
-    int num_columns = static_cast<int>(columns.size());
+  int num_columns = static_cast<int>(columns.size());
 
-    // columns are not specified explicitly. Add all columns
-    if (columns.size() == 0) {
-        num_columns = reader->metadata()->num_columns();
-        columns.resize(num_columns);
-        for (int i = 0; i < num_columns; i++) {
-            columns[i] = i;
-        }
+  // columns are not specified explicitly. Add all columns
+  if (columns.size() == 0) {
+    num_columns = reader->metadata()->num_columns();
+    columns.resize(num_columns);
+    for (int i = 0; i < num_columns; i++) {
+      columns[i] = i;
     }
+  }
 
-    std::vector<int64_t> total_rows(num_columns, 0);
+  std::vector<int64_t> total_rows(num_columns, 0);
 
-    for (int r = 0; r < reader->metadata()->num_row_groups(); ++r) {
-        auto group_reader = reader->RowGroup(r);
-        int col = 0;
-        for (auto i : columns) {
-            std::shared_ptr<ColumnReader> col_reader = group_reader->Column(i);
-            size_t value_byte_size = GetTypeByteSize(col_reader->descr()->physical_type());
-            std::vector<uint8_t> values(column_batch_size * value_byte_size);
+  return seastar::do_for_each(boost::counting_iterator<int>(0),
+                              boost::counting_iterator<int>(reader->metadata()->num_row_groups()),
+                              [&] (int r) {
+    auto group_reader = reader->RowGroup(r);
+    int col = 0;
+    return seastar::do_for_each(columns.begin(), columns.end(), [&] (int i) {
+     return group_reader->Column(i).then([&](std::shared_ptr<ColumnReader> col_reader) {
+       size_t value_byte_size = GetTypeByteSize(col_reader->descr()->physical_type());
+       std::vector<uint8_t> values(column_batch_size * value_byte_size);
 
-            int64_t values_read = 0;
-            while (col_reader->HasNext()) {
-                int64_t levels_read =
-                        ScanAllValues(column_batch_size, def_levels.data(), rep_levels.data(),
-                                      values.data(), &values_read, col_reader.get());
-                if (col_reader->descr()->max_repetition_level() > 0) {
-                    for (int64_t i = 0; i < levels_read; i++) {
-                        if (rep_levels[i] == 0) {
-                            total_rows[col]++;
-                        }
-                    }
-                } else {
-                    total_rows[col] += levels_read;
-                }
-            }
-            col++;
-        }
-    }
-
+       int64_t values_read = 0;
+       return seastar::do_until([&col_reader] { return col_reader->HasNext(); }, [&]() {
+         return parquet::seastarized::ScanAllValues(column_batch_size, def_levels.data(), rep_levels.data(),
+                       values.data(), &values_read, col_reader.get()).then([&] (int64_t levels_read) {
+           if (col_reader->descr()->max_repetition_level() > 0) {
+             for (int64_t i = 0; i < levels_read; i++) {
+               if (rep_levels[i] == 0) {
+                 total_rows[col]++;
+               }
+             }
+             return seastar::make_ready_future();
+           } else {
+             total_rows[col] += levels_read;
+             return seastar::make_ready_future();
+           }
+         });
+       }).then([&]() {
+         col++;
+         return seastar::make_ready_future();
+       });
+     });
+    });
+  }).then([&]() {
     for (int i = 1; i < num_columns; ++i) {
-        if (total_rows[0] != total_rows[i]) {
-            throw ParquetException("Parquet error: Total rows among columns do not match");
-        }
+      if (total_rows[0] != total_rows[i]) {
+        throw ParquetException("Parquet error: Total rows among columns do not match");
+      }
     }
-
-    return total_rows[0];
+    return seastar::make_ready_future<int64_t>(total_rows[0]);
+  });
 }
-#endif
 }  // namespace seastarized
 
 }  // namespace parquet
