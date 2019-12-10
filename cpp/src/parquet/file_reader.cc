@@ -1057,24 +1057,23 @@ seastar::future<std::unique_ptr<ParquetFileReader::Contents>> ParquetFileReader:
 
     if (metadata == nullptr) {
         // Validates magic bytes, parses metadata, and initializes the SchemaDescriptor
-        return file->ParseMetaData().then([result = std::move(result)] {
-          return seastar::make_ready_future<std::unique_ptr<ParquetFileReader::Contents>>(result);
+        return file->ParseMetaData().then([result = std::move(result)]() mutable {
+          return seastar::make_ready_future<std::unique_ptr<ParquetFileReader::Contents>>(std::move(result));
         });
     } else {
       file->set_metadata(metadata);
-      return seastar::make_ready_future<std::unique_ptr<ParquetFileReader::Contents>>(result);
+      return seastar::make_ready_future<std::unique_ptr<ParquetFileReader::Contents>>(std::move(result));
     }
 }
-
 
 seastar::future<std::unique_ptr<ParquetFileReader>> ParquetFileReader::Open(
         const std::shared_ptr<seastarized::RandomAccessFile>& source,
         const ReaderProperties& props, const std::shared_ptr<FileMetaData>& metadata) {
   return SerializedFile::Open(source, props, metadata).then([]
-  (std::unique_ptr<ParquetFileReader::Contents> contents) {
+  (std::unique_ptr<ParquetFileReader::Contents> contents) mutable {
     std::unique_ptr<ParquetFileReader> result(new ParquetFileReader());
     result->Open(std::move(contents));
-    return seastar::make_ready_future<std::unique_ptr<ParquetFileReader>>(result);
+    return seastar::make_ready_future<std::unique_ptr<ParquetFileReader>>(std::move(result));
   });
 }
 
