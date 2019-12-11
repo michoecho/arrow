@@ -175,6 +175,10 @@ class FileFutureInputStream : public FutureInputStream {
 };
 
 class RandomAccessFile : public FutureInputStream {
+
+  private:
+    ::arrow::io::BufferReader* br_;
+
 /// Modelled after ArrowInputFile
   public:
     /// Necessary because we hold a std::unique_ptr
@@ -231,37 +235,48 @@ class RandomAccessFile : public FutureInputStream {
     };
 
 //    Because of Memory/BufferReader
-    explicit RandomAccessFile(const std::shared_ptr<Buffer>& buffer) :  {
-      br_ = new ::arrow::io::BufferReader(buffer);
-    };
+  explicit RandomAccessFile(const std::shared_ptr<Buffer>& buffer) {
+    br_ = new ::arrow::io::BufferReader(buffer);
+  };
 
   seastar::future<int64_t> Read(int64_t nbytes, void *out) {
-    br_->Read(nbytes, out);
-    return seastar::make_ready_future();
+    int64_t read = 0;
+    br_->Read(nbytes, &read, out);
+    return seastar::make_ready_future<int64_t>(read);
   }
 
   seastar::future<int64_t> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) {
-    return seastar::make_ready_future<int64_t>(br_->Read(nbytes, out));
+    int64_t read = 0;
+    br_->Read(nbytes, &read, out);
+    return seastar::make_ready_future<int64_t>(read);
   }
 
-  seastar::future<int64_t> Peek(int64_t nbytes, std::string_view *out) {
-    return seastar::make_ready_future(br_->Peek(nbytes, out));
+  seastar::future<int64_t> Peek(int64_t nbytes, ::arrow::util::string_view *out) {
+    br_->Peek(nbytes, out);
+    return seastar::make_ready_future<int64_t>(0);
   }
 
   seastar::future<> Advance(int64_t nbytes) override {
     br_->Advance(nbytes);
-    return seastar::make_ready_future<>()
+    return seastar::make_ready_future<>();
   }
 
   int64_t Tell() override {
-    return br_.Tell();
+    int64_t pos = 0;
+    br_->Tell(&pos);
+    return pos;
   }
 
-  private:
-    ::arrow::io::BufferReader* br_;
-  int64_t pos = 0;
-  int64_t buffered_bytes = 0;
+  seastar::future<int64_t> Peek(int64_t nbytes, std::string_view *out) override {
+    throw "Not implemented";
+    // Peek has this other signature
+//    ::arrow::util::string_view out_sv = static_cast<::arrow::util::string_view>(out);
+//    return Peek(nbytes, out_sv);
+  }
 
+  seastar::future<> Close() override {
+    return seastar::make_ready_future();
+  }
 };
 
 } // namespace parquet::seastarized

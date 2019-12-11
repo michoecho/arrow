@@ -80,20 +80,15 @@ seastar::future<std::shared_ptr<seastarized::FutureInputStream>> ReaderPropertie
   }
 #endif
   std::shared_ptr<Buffer> data;
-  return source->ReadAt(start, num_bytes, &data).then([=] {
+  return source->ReadAt(start, num_bytes, &data).then([=, source = std::move(source), data = std::move(data)]() {
     if (data->size() != num_bytes) {
       std::stringstream ss;
       ss << "Tried reading " << num_bytes << " bytes starting at position " << start
          << " from file but only got " << data->size();
-      return seastar::make_exception_future(ParquetException(ss.str()));
-    } else {
-      return seastar::make_ready_future();
+      throw ParquetException(ss.str());
     }
-  }).then([data, source, start, num_bytes]{
-    // TODO jacek42
-//    std::shared_ptr<seastarized::FutureInputStream> tt = seastarized::RandomAccessFile::GetStream(source, start, num_bytes);
-    auto ptr = nullptr; // std::make_shared<seastarized::RandomAccessFile>(data);
-    return std::shared_ptr<seastarized::FutureInputStream>(ptr);
+    auto ft = std::make_shared<seastarized::RandomAccessFile>(data);
+    return seastar::make_ready_future<std::shared_ptr<seastarized::FutureInputStream>>(ft);
   });
 }
 
