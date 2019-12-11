@@ -91,8 +91,7 @@ seastar::future<std::shared_ptr<seastarized::FutureInputStream>> ReaderPropertie
     }
   }).then([data, source, start, num_bytes]{
     // TODO jacek42
-    std::shared_ptr<seastarized::FutureInputStream> tt = seastarized::RandomAccessFile::GetStream(source, start, num_bytes);
-
+//    std::shared_ptr<seastarized::FutureInputStream> tt = seastarized::RandomAccessFile::GetStream(source, start, num_bytes);
     auto ptr = nullptr; // std::make_shared<seastarized::RandomAccessFile>(data);
     return std::shared_ptr<seastarized::FutureInputStream>(ptr);
   });

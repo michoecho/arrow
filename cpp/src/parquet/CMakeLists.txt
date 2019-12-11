@@ -381,6 +381,12 @@ add_seastar_test(seastar-test-2
                  test_main.cc
                  test_util.cc)
 
+add_seastar_test(seastar-test-4
+        SOURCES
+        file_deserialize_test_seastar.cc
+        test_main.cc
+        test_util.cc)
+
 if(PARQUET_REQUIRE_ENCRYPTION)
   add_seastar_test(encryption-test
                    SOURCES
@@ -389,6 +395,7 @@ if(PARQUET_REQUIRE_ENCRYPTION)
                    encryption_properties_test.cc
                    test_main.cc
                    test_util.cc)
+
 endif()
 
 # Those tests need to use static linking as they access thrift-generated

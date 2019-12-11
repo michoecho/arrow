@@ -179,22 +179,22 @@ class RandomAccessFile : public FileFutureInputStream {
     /// Necessary because we hold a std::unique_ptr
     ~RandomAccessFile() override {};
 
-    /// \brief Create an isolated InputStream that reads a segment of a
-    /// RandomAccessFile. Multiple such stream can be created and used
-    /// independently without interference
-    /// \param[in] file a file instance
-    /// \param[in] file_offset the starting position in the file
-    /// \param[in] nbytes the extent of bytes to read. The file should have
-    /// sufficient bytes available
-    static std::shared_ptr<FutureInputStream> GetStream(std::shared_ptr<RandomAccessFile> file,
-                                                  int64_t file_offset, int64_t nbytes) {
-      //TODO jacek42
-      return nullptr;
-    };
+//    /// TODO jacek42 sometime later, when it will be needed
+//    /// \brief Create an isolated InputStream that reads a segment of a
+//    /// RandomAccessFile. Multiple such stream can be created and used
+//    /// independently without interference
+//    /// \param[in] file a file instance
+//    /// \param[in] file_offset the starting position in the file
+//    /// \param[in] nbytes the extent of bytes to read. The file should have
+//    /// sufficient bytes available
+//    static std::shared_ptr<FutureInputStream> GetStream(std::shared_ptr<RandomAccessFile> file,
+//                                                  int64_t file_offset, int64_t nbytes) {
+//      return nullptr;
+//    };
 
     virtual void GetSize(int64_t* size) {
       // TODO jacek42
-      // TODO do not make it a future, just throw an exception
+      // TODO do not make it a future, just throw an exception if the file is not open
     }
 
     /// \brief Read nbytes at position, provide default implementations using
@@ -226,14 +226,14 @@ class RandomAccessFile : public FileFutureInputStream {
       return seastar::make_ready_future();
     };
 
-    /// Because of interfaces.h/Seekable
-    virtual seastar::future<> Seek(int64_t position) {
-      //TODO jacek42
-      return seastar::make_ready_future();
-    }
+//    TODO jacek42 sometime later, when it will be needed
+//    Because of interfaces.h/Seekable
+//    virtual seastar::future<> Seek(int64_t position) {
+//      return seastar::make_ready_future();
+//    }
 
-    // Because of Memory/BufferReader
-//    explicit RandomAccessFile(const std::shared_ptr<Buffer>& buffer);
+//    Because of Memory/BufferReader
+    explicit RandomAccessFile(const std::shared_ptr<Buffer>& buffer);
 //    explicit RandomAccessFile(const Buffer& buffer);
 //    RandomAccessFile(const uint8_t* data, int64_t size);
 
