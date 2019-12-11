@@ -23,8 +23,6 @@
 #include <string>
 #include <vector>
 
-#include <seastar/core/fstream.hh>
-
 #include "parquet/metadata.h"  // IWYU pragma: keep
 #include "parquet/platform.h"
 #include "parquet/properties.h"
@@ -140,104 +138,82 @@ int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_si
                          ParquetFileReader* reader);
 
 namespace seastarized {
+
 class ColumnReader;
 class PageReader;
 class RandomAccessSource;
-class PARQUET_EXPORT RowGroupReader{
-    public:
-    // Forward declare a virtual class 'Contents' to aid dependency injection and more
-    // easily create test fixtures
-    // An implementation of the Contents class is defined in the .cc file
-    struct Contents {
-#if 0
-      virtual ~Contents() {}
-      virtual std::unique_ptr<PageReader> GetColumnPageReader(int i) = 0;
-      virtual const RowGroupMetaData* metadata() const = 0;
-      virtual const ReaderProperties* properties() const = 0;
-#endif
-    };
-#if 0
-    explicit RowGroupReader(std::unique_ptr<Contents> contents);
 
-    // Returns the rowgroup metadata
-    const RowGroupMetaData* metadata() const;
+class PARQUET_EXPORT RowGroupReader {
+ public:
+  // Forward declare a virtual class 'Contents' to aid dependency injection and more
+  // easily create test fixtures
+  // An implementation of the Contents class is defined in the .cc file
+  struct Contents {
+    virtual ~Contents() {}
+    virtual std::unique_ptr<PageReader> GetColumnPageReader(int i) = 0;
+    virtual const RowGroupMetaData* metadata() const = 0;
+    virtual const ReaderProperties* properties() const = 0;
+  };
 
-    // Construct a ColumnReader for the indicated row group-relative
-    // column. Ownership is shared with the RowGroupReader.
-    std::shared_ptr<ColumnReader> Column(int i);
+  explicit RowGroupReader(std::unique_ptr<Contents> contents);
 
-    std::unique_ptr<PageReader> GetColumnPageReader(int i);
-#endif
-    private:
-    // Holds a pointer to an instance of Contents implementation
-    std::unique_ptr<Contents> contents_;
+  // Returns the rowgroup metadata
+  const RowGroupMetaData* metadata() const;
+
+  // Construct a ColumnReader for the indicated row group-relative
+  // column. Ownership is shared with the RowGroupReader.
+  std::shared_ptr<ColumnReader> Column(int i);
+
+  std::unique_ptr<PageReader> GetColumnPageReader(int i);
+
+ private:
+  // Holds a pointer to an instance of Contents implementation
+  std::unique_ptr<Contents> contents_;
 };
 
 class PARQUET_EXPORT ParquetFileReader {
-        public:
-        // Declare a virtual class 'Contents' to aid dependency injection and more
-        // easily create test fixtures
-        // An implementation of the Contents class is defined in the .cc file
-        struct PARQUET_EXPORT Contents {
-#if 0
-            static std::unique_ptr<Contents> Open(
-                    const std::shared_ptr<::arrow::io::RandomAccessFile>& source,
-                    const ReaderProperties& props = default_reader_properties(),
-                    const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
-
-            virtual ~Contents() = default;
-            // Perform any cleanup associated with the file contents
-            virtual void Close() = 0;
-            virtual std::shared_ptr<RowGroupReader> GetRowGroup(int i) = 0;
-            virtual std::shared_ptr<FileMetaData> metadata() const = 0;
-#endif
-        };
-#if 0
-        ParquetFileReader();
-        ~ParquetFileReader();
-        // Create a reader from some implementation of parquet-cpp's generic file
-        // input interface
-        //
-        // If you cannot provide exclusive access to your file resource, create a
-        // subclass of RandomAccessSource that wraps the shared resource
-        ARROW_DEPRECATED("Use arrow::io::RandomAccessFile version")
-        static std::unique_ptr<ParquetFileReader> Open(
-        std::unique_ptr<RandomAccessSource> source,
+ public:
+  // Declare a virtual class 'Contents' to aid dependency injection and more
+  // easily create test fixtures
+  // An implementation of the Contents class is defined in the .cc file
+  struct PARQUET_EXPORT Contents {
+    static seastar::future<std::unique_ptr<Contents>> Open(
+        const std::shared_ptr<RandomAccessSource>& source,
         const ReaderProperties& props = default_reader_properties(),
         const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
 
-        // Create a file reader instance from an Arrow file object. Thread-safety is
-        // the responsibility of the file implementation
-        static std::unique_ptr<ParquetFileReader> Open(
-        const std::shared_ptr<::arrow::io::RandomAccessFile>& source,
-        const ReaderProperties& props = default_reader_properties(),
-        const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
+    virtual ~Contents() = default;
+    // Perform any cleanup associated with the file contents
+    virtual void Close() = 0;
+    virtual std::shared_ptr<RowGroupReader> GetRowGroup(int i) = 0;
+    virtual std::shared_ptr<FileMetaData> metadata() const = 0;
+  };
 
-        // API Convenience to open a serialized Parquet file on disk, using Arrow IO
-        // interfaces.
-        static std::unique_ptr<ParquetFileReader> OpenFile(
-        const std::string& path, bool memory_map = true,
-        const ReaderProperties& props = default_reader_properties(),
-        const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
+  ParquetFileReader();
+  ~ParquetFileReader();
 
-        void Open(std::unique_ptr<Contents> contents);
-        void Close();
+  static seastar::future<std::unique_ptr<ParquetFileReader>> Open(
+      const std::shared_ptr<RandomAccessSource>& source,
+      const ReaderProperties& props = default_reader_properties(),
+      const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
 
-        // The RowGroupReader is owned by the FileReader
-        std::shared_ptr<RowGroupReader> RowGroup(int i);
+  void Open(std::unique_ptr<Contents> contents);
+  void Close();
 
-        // Returns the file metadata. Only one instance is ever created
-        std::shared_ptr<FileMetaData> metadata() const;
-#endif
-        private:
-        // Holds a pointer to an instance of Contents implementation
-        std::unique_ptr<Contents> contents_;
+  // The RowGroupReader is owned by the FileReader
+  std::shared_ptr<RowGroupReader> RowGroup(int i);
+
+  // Returns the file metadata. Only one instance is ever created
+  std::shared_ptr<FileMetaData> metadata() const;
+
+ private:
+  // Holds a pointer to an instance of Contents implementation
+  std::unique_ptr<Contents> contents_;
 };
 
-#if 0
 // Read only Parquet file metadata
-std::shared_ptr<FileMetaData> PARQUET_EXPORT
-ReadMetaData(const std::shared_ptr<::arrow::io::RandomAccessFile>& source);
+seastar::future<std::shared_ptr<FileMetaData>> PARQUET_EXPORT
+ReadMetaData(const std::shared_ptr<RandomAccessSource>& source);
 
 /// \brief Scan all values in file. Useful for performance testing
 /// \param[in] columns the column numbers to scan. If empty scans all
@@ -245,10 +221,11 @@ ReadMetaData(const std::shared_ptr<::arrow::io::RandomAccessFile>& source);
 /// \param[in] reader a ParquetFileReader instance
 /// \return number of semantic rows in file
 PARQUET_EXPORT
-        int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
-        ParquetFileReader* reader);
-#endif
-}  // namepsace seatarized
+seastar::future<int64_t>
+ScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
+                 ParquetFileReader* reader);
+
+}  // namespace seastarized
 
 }  // namespace parquet
 
