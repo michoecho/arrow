@@ -33,6 +33,7 @@
 #include "parquet/platform.h"
 #include "parquet/schema.h"
 #include "parquet/types.h"
+#include "parquet/io.h"
 
 namespace parquet {
 
@@ -55,6 +56,10 @@ class PARQUET_EXPORT ReaderProperties {
 
   std::shared_ptr<ArrowInputStream> GetStream(std::shared_ptr<ArrowInputFile> source,
                                               int64_t start, int64_t num_bytes);
+
+  std::shared_ptr<seastarized::FutureInputStream>
+  GetStream(std::shared_ptr<seastarized::RandomAccessSource> source,
+            int64_t start, int64_t num_bytes);
 
   bool is_buffered_stream_enabled() const { return buffered_stream_enabled_; }
 

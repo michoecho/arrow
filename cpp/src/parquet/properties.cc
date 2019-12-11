@@ -50,6 +50,11 @@ std::shared_ptr<ArrowInputStream> ReaderProperties::GetStream(
   }
 }
 
+std::shared_ptr<seastarized::FutureInputStream> ReaderProperties::GetStream(
+    std::shared_ptr<seastarized::RandomAccessSource> source, int64_t start, int64_t num_bytes) {
+  return source->GetStream(start, num_bytes);
+}
+
 ArrowReaderProperties default_arrow_reader_properties() {
   static ArrowReaderProperties default_reader_props;
   return default_reader_props;
