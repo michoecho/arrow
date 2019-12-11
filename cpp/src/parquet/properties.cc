@@ -87,7 +87,7 @@ seastar::future<std::shared_ptr<seastarized::FutureInputStream>> ReaderPropertie
          << " from file but only got " << data->size();
       throw ParquetException(ss.str());
     }
-    auto ft = std::make_shared<seastarized::RandomAccessFile>(data);
+    auto ft = std::make_shared<seastarized::BufferRandomAccessFile>(data);
     return seastar::make_ready_future<std::shared_ptr<seastarized::FutureInputStream>>(ft);
   });
 }
