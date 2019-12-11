@@ -271,6 +271,13 @@ int64_t PARQUET_EXPORT ScanAllValues(int32_t batch_size, int16_t* def_levels,
                                      int64_t* values_buffered,
                                      parquet::ColumnReader* reader);
 
+namespace seastarized {
+  seastar::future<int64_t> PARQUET_EXPORT ScanAllValues(int32_t batch_size, int16_t* def_levels,
+                                                        int16_t* rep_levels, uint8_t* values,
+                                                        int64_t* values_buffered,
+                                                        seastarized::ColumnReader* reader);
+}  // namespace seastarized
+
 }  // namespace parquet
 
 #endif  // PARQUET_COLUMN_SCANNER_H
