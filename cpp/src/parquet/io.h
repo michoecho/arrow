@@ -2,6 +2,7 @@
 #include <seastar/core/fstream.hh>
 #include <vector>
 #include <string_view>
+#include <arrow/io/api.h>
 #include "arrow/util/memory.h"
 
 namespace parquet::seastarized {
@@ -173,11 +174,11 @@ class FileFutureInputStream : public FutureInputStream {
   }
 };
 
-class RandomAccessFile : public FileFutureInputStream {
+class RandomAccessFile : public FutureInputStream {
 /// Modelled after ArrowInputFile
   public:
     /// Necessary because we hold a std::unique_ptr
-    ~RandomAccessFile() override {};
+//    ~RandomAccessFile() override {};
 
 //    /// TODO jacek42 sometime later, when it will be needed
 //    /// \brief Create an isolated InputStream that reads a segment of a
@@ -195,6 +196,7 @@ class RandomAccessFile : public FileFutureInputStream {
     virtual void GetSize(int64_t* size) {
       // TODO jacek42
       // TODO do not make it a future, just throw an exception if the file is not open
+      br_->GetSize(size);
     }
 
     /// \brief Read nbytes at position, provide default implementations using
@@ -209,6 +211,7 @@ class RandomAccessFile : public FileFutureInputStream {
     /// \return Status
     virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read, void* out) {
       //TODO jacek42
+      br_->ReadAt(position, nbytes, bytes_read, out);
       return seastar::make_ready_future();
     };
 
@@ -223,22 +226,42 @@ class RandomAccessFile : public FileFutureInputStream {
     /// retrieved by calling Buffer::size().
     virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out) {
       //TODO jacek42
+      br_->ReadAt(position, nbytes, out);
       return seastar::make_ready_future();
     };
 
-//    TODO jacek42 sometime later, when it will be needed
-//    Because of interfaces.h/Seekable
-//    virtual seastar::future<> Seek(int64_t position) {
-//      return seastar::make_ready_future();
-//    }
-
 //    Because of Memory/BufferReader
-    explicit RandomAccessFile(const std::shared_ptr<Buffer>& buffer);
-//    explicit RandomAccessFile(const Buffer& buffer);
-//    RandomAccessFile(const uint8_t* data, int64_t size);
+    explicit RandomAccessFile(const std::shared_ptr<Buffer>& buffer) :  {
+      br_ = new ::arrow::io::BufferReader(buffer);
+    };
 
-    protected:
-      RandomAccessFile();
+  seastar::future<int64_t> Read(int64_t nbytes, void *out) {
+    br_->Read(nbytes, out);
+    return seastar::make_ready_future();
+  }
+
+  seastar::future<int64_t> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) {
+    return seastar::make_ready_future<int64_t>(br_->Read(nbytes, out));
+  }
+
+  seastar::future<int64_t> Peek(int64_t nbytes, std::string_view *out) {
+    return seastar::make_ready_future(br_->Peek(nbytes, out));
+  }
+
+  seastar::future<> Advance(int64_t nbytes) override {
+    br_->Advance(nbytes);
+    return seastar::make_ready_future<>()
+  }
+
+  int64_t Tell() override {
+    return br_.Tell();
+  }
+
+  private:
+    ::arrow::io::BufferReader* br_;
+  int64_t pos = 0;
+  int64_t buffered_bytes = 0;
+
 };
 
 } // namespace parquet::seastarized
