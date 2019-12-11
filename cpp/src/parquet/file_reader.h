@@ -184,15 +184,14 @@ class PARQUET_EXPORT ParquetFileReader {
 
             virtual ~Contents() = default;
             // Perform any cleanup associated with the file contents
-            virtual seastar::future<> Close() = 0;
+            virtual void Close() = 0;
             virtual std::shared_ptr<RowGroupReader> GetRowGroup(int i) = 0;
             virtual std::shared_ptr<FileMetaData> metadata() const = 0;
         };
 
         ParquetFileReader();
-#if 0
         ~ParquetFileReader();
-#endif
+
 #if 0
         // Create a reader from some implementation of parquet-cpp's generic file
         // input interface
@@ -220,9 +219,8 @@ class PARQUET_EXPORT ParquetFileReader {
         const std::shared_ptr<FileMetaData>& metadata = NULLPTR);
 
         void Open(std::unique_ptr<Contents> contents);
-#if 0
         void Close();
-#endif
+
         // The RowGroupReader is owned by the FileReader
         std::shared_ptr<RowGroupReader> RowGroup(int i);
 

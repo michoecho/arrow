@@ -192,9 +192,9 @@ class RandomAccessFile : public FileFutureInputStream {
       return nullptr;
     };
 
-    virtual seastar::future<> GetSize(int64_t* size) {
-      //TODO jacek42
-      return seastar::make_ready_future();
+    virtual void GetSize(int64_t* size) {
+      // TODO jacek42
+      // TODO do not make it a future, just throw an exception
     }
 
     /// \brief Read nbytes at position, provide default implementations using

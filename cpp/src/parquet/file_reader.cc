@@ -664,6 +664,7 @@ public:
 
     seastar::future<std::unique_ptr<PageReader>> GetColumnPageReader(int i) override {
         // Read column chunk from the file
+
         auto col = row_group_metadata_->ColumnChunk(i, row_group_ordinal_, file_decryptor_);
 
         int64_t col_start = col->data_page_offset();
@@ -674,19 +675,19 @@ public:
 
         int64_t col_length = col->total_compressed_size();
 
-////        TODO42 jacek42 there's a chance we don't actually need this
-//        // PARQUET-816 workaround for old files created by older parquet-mr
-//        const ApplicationVersion& version = file_metadata_->writer_version();
-//        if (version.VersionLt(ApplicationVersion::PARQUET_816_FIXED_VERSION())) {
-//            // The Parquet MR writer had a bug in 1.2.8 and below where it didn't include the
-//            // dictionary page header size in total_compressed_size and total_uncompressed_size
-//            // (see IMPALA-694). We add padding to compensate.
-//            int64_t size = -1;
-//            source_->GetSize(&size);
-//            int64_t bytes_remaining = size - (col_start + col_length);
-//            int64_t padding = std::min<int64_t>(kMaxDictHeaderSize, bytes_remaining);
-//            col_length += padding;
-//        }
+//        TODO jacek42 there's a chance we don't actually need this
+        // PARQUET-816 workaround for old files created by older parquet-mr
+        const ApplicationVersion& version = file_metadata_->writer_version();
+        if (version.VersionLt(ApplicationVersion::PARQUET_816_FIXED_VERSION())) {
+            // The Parquet MR writer had a bug in 1.2.8 and below where it didn't include the
+            // dictionary page header size in total_compressed_size and total_uncompressed_size
+            // (see IMPALA-694). We add padding to compensate.
+            int64_t size = -1;
+            source_->GetSize(&size);
+            int64_t bytes_remaining = size - (col_start + col_length);
+            int64_t padding = std::min<int64_t>(kMaxDictHeaderSize, bytes_remaining);
+            col_length += padding;
+        }
 
         return properties_.GetStream(source_, col_start, col_length).then([=, col = std::move(col)](std::shared_ptr<FutureInputStream> stream) {
             std::unique_ptr<ColumnCryptoMetaData> crypto_metadata = col->crypto_metadata();
@@ -744,23 +745,20 @@ private:
 // This class takes ownership of the provided data source
 class SerializedFile : public ParquetFileReader::Contents {
 public:
+  SerializedFile(const std::shared_ptr<RandomAccessFile>& source,
+                 const ReaderProperties& props = default_reader_properties())
+          : source_(source), properties_(props) {}
 
-    SerializedFile(const std::shared_ptr<RandomAccessFile>& source,
-                   const ReaderProperties& props = default_reader_properties())
-            : source_(source), properties_(props) {}
+  ~SerializedFile() override {
+      try {
+          Close();
+      } catch (...) {
+      }
+  }
 
-#if 0
-    ~SerializedFile() override {
-        try {
-            Close();
-        } catch (...) {
-        }
-    }
-#endif
-  seastar::future<> Close() override {
-    // TODO jacek42 futurize
+  void Close() override {
+    // TODO jacek42 does it really not do any IO?
     if (file_decryptor_) file_decryptor_->WipeOutDecryptionKeys();
-    return seastar::make_ready_future();
   }
 
   std::shared_ptr<RowGroupReader> GetRowGroup(int i) override {
@@ -778,54 +776,54 @@ public:
 
   seastar::future<> ParseMetaData() {
     int64_t file_size = -1;
-    return source_->GetSize(&file_size).then([=] {
-      if (file_size == 0) {
-        throw ParquetInvalidOrCorruptedFileException("Parquet file size is 0 bytes");
-      } else if (file_size < kFooterSize) {
+    source_->GetSize(&file_size);
+
+    if (file_size == 0) {
+      throw ParquetInvalidOrCorruptedFileException("Parquet file size is 0 bytes");
+    } else if (file_size < kFooterSize) {
+      throw ParquetInvalidOrCorruptedFileException(
+              "Parquet file size is ", file_size,
+              " bytes, smaller than the minimum file footer (", kFooterSize, " bytes)");
+    }
+
+    std::shared_ptr<Buffer> footer_buffer;
+    int64_t footer_read_size = std::min(file_size, kDefaultFooterReadSize);
+
+    return source_->ReadAt(file_size - footer_read_size, footer_read_size, &footer_buffer).then([=] {
+      // Check if all bytes are read. Check if last 4 bytes read have the magic bits
+      if (footer_buffer->size() != footer_read_size ||
+          (memcmp(footer_buffer->data() + footer_read_size - 4, kParquetMagic, 4) != 0 &&
+           memcmp(footer_buffer->data() + footer_read_size - 4, kParquetEMagic, 4) != 0)) {
         throw ParquetInvalidOrCorruptedFileException(
-                "Parquet file size is ", file_size,
-                " bytes, smaller than the minimum file footer (", kFooterSize, " bytes)");
+                "Parquet magic bytes not found in footer. Either the file is corrupted or this "
+                "is not a parquet file.");
       }
 
-      std::shared_ptr<Buffer> footer_buffer;
-      int64_t footer_read_size = std::min(file_size, kDefaultFooterReadSize);
+      if (memcmp(footer_buffer->data() + footer_read_size - 4, kParquetEMagic, 4) == 0) {
+        // Encrypted file with Encrypted footer.
+        return ParseMetaDataOfEncryptedFileWithEncryptedFooter(footer_buffer, footer_read_size,
+                                                        file_size);
+      }
 
-      return source_->ReadAt(file_size - footer_read_size, footer_read_size, &footer_buffer).then([=] {
-        // Check if all bytes are read. Check if last 4 bytes read have the magic bits
-        if (footer_buffer->size() != footer_read_size ||
-            (memcmp(footer_buffer->data() + footer_read_size - 4, kParquetMagic, 4) != 0 &&
-             memcmp(footer_buffer->data() + footer_read_size - 4, kParquetEMagic, 4) != 0)) {
-          throw ParquetInvalidOrCorruptedFileException(
-                  "Parquet magic bytes not found in footer. Either the file is corrupted or this "
-                  "is not a parquet file.");
-        }
-
-        if (memcmp(footer_buffer->data() + footer_read_size - 4, kParquetEMagic, 4) == 0) {
-          // Encrypted file with Encrypted footer.
-          return ParseMetaDataOfEncryptedFileWithEncryptedFooter(footer_buffer, footer_read_size,
-                                                          file_size);
-        }
-
-        // No encryption or encryption with plaintext footer mode.
-        std::shared_ptr<Buffer> metadata_buffer;
-        uint32_t metadata_len, read_metadata_len;
-        return ParseUnencryptedFileMetadata(footer_buffer, footer_read_size, file_size,
-                                     &metadata_buffer, &metadata_len, &read_metadata_len).then([=] {
-          auto file_decryption_properties = properties_.file_decryption_properties();
-          if (!file_metadata_->is_encryption_algorithm_set()) {  // Non encrypted file.
-            if (file_decryption_properties != nullptr) {
-              if (!file_decryption_properties->plaintext_files_allowed()) {
-                throw ParquetException("Applying decryption properties on plaintext file");
-              }
+      // No encryption or encryption with plaintext footer mode.
+      std::shared_ptr<Buffer> metadata_buffer;
+      uint32_t metadata_len, read_metadata_len;
+      return ParseUnencryptedFileMetadata(footer_buffer, footer_read_size, file_size,
+                                   &metadata_buffer, &metadata_len, &read_metadata_len).then([=] {
+        auto file_decryption_properties = properties_.file_decryption_properties();
+        if (!file_metadata_->is_encryption_algorithm_set()) {  // Non encrypted file.
+          if (file_decryption_properties != nullptr) {
+            if (!file_decryption_properties->plaintext_files_allowed()) {
+              throw ParquetException("Applying decryption properties on plaintext file");
             }
-            return seastar::make_ready_future();
-          } else {
-            // Encrypted file with plaintext footer mode.
-            ParseMetaDataOfEncryptedFileWithPlaintextFooter(
-                    file_decryption_properties, metadata_buffer, metadata_len, read_metadata_len);
-            return seastar::make_ready_future();
           }
-        });
+          return seastar::make_ready_future();
+        } else {
+          // Encrypted file with plaintext footer mode.
+          ParseMetaDataOfEncryptedFileWithPlaintextFooter(
+                  file_decryption_properties, metadata_buffer, metadata_len, read_metadata_len);
+          return seastar::make_ready_future();
+        }
       });
     });
   }
@@ -1037,15 +1035,12 @@ std::string SerializedFile::HandleAadPrefix(
 
 ParquetFileReader::ParquetFileReader() {}
 
-#if 0
 ParquetFileReader::~ParquetFileReader() {
     try {
         Close();
     } catch (...) {
     }
 }
-#endif
-
 
 // Open the file. If no metadata is passed, it is parsed from the footer of
 // the file
@@ -1111,13 +1106,11 @@ void ParquetFileReader::Open(std::unique_ptr<ParquetFileReader::Contents> conten
   contents_ = std::move(contents);
 }
 
-#if 0
 void ParquetFileReader::Close() {
     if (contents_) {
         contents_->Close();
     }
 }
-#endif
 
 std::shared_ptr<FileMetaData> ParquetFileReader::metadata() const {
     return contents_->metadata();
@@ -1177,7 +1170,7 @@ seastar::future<int64_t> ScanFileContents(std::vector<int> columns_arg, const in
        auto values = std::make_shared<std::vector<uint8_t>>(column_batch_size * value_byte_size);
        auto col = std::make_shared<int>(0);
        auto values_read = std::make_shared<int64_t>(0);
-       return seastar::do_until([&col_reader] { /* TODO jacek42 return col_reader->HasNext();*/ return true; }, [=]() {
+       return seastar::do_until([col_reader] { /* TODO jacek42 return col_reader->HasNext();*/ return true; }, [=]() {
          return seastarized::ScanAllValues(column_batch_size, def_levels->data(), rep_levels->data(),
                        values->data(), &(*values_read), col_reader.get()).then([=] (int64_t levels_read) {
            if (col_reader->descr()->max_repetition_level() > 0) {
