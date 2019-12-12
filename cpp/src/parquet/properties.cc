@@ -63,33 +63,9 @@ std::shared_ptr<ArrowWriterProperties> default_arrow_writer_properties() {
   return default_writer_properties;
 }
 
-seastar::future<std::shared_ptr<seastarized::FutureInputStream>> ReaderProperties::GetStream(
+std::shared_ptr<seastarized::FutureInputStream> ReaderProperties::GetStream(
         std::shared_ptr<seastarized::RandomAccessFile> source, int64_t start, int64_t num_bytes) {
-#if 0
-  if (buffered_stream_enabled_) {
-    // ARROW-6180 / PARQUET-1636 Create isolated reader that references segment
-    // of source
-    std::shared_ptr<seastarized::FutureInputStream> safe_stream =
-            seastarized::RandomAccessFile::GetStream(source, start, num_bytes);
-    std::shared_ptr<::arrow::io::BufferedInputStream> stream;
-    PARQUET_THROW_NOT_OK(::arrow::io::BufferedInputStream::Create(
-            buffer_size_, pool_, safe_stream, &stream, num_bytes));
-    return std::move(stream);
-  } else {
-    ///
-  }
-#endif
-  std::shared_ptr<Buffer> data;
-  return source->ReadAt(start, num_bytes, &data).then([=, source = std::move(source), data = std::move(data)]() {
-    if (data->size() != num_bytes) {
-      std::stringstream ss;
-      ss << "Tried reading " << num_bytes << " bytes starting at position " << start
-         << " from file but only got " << data->size();
-      throw ParquetException(ss.str());
-    }
-    auto ft = std::make_shared<seastarized::BufferRandomAccessFile>(data);
-    return seastar::make_ready_future<std::shared_ptr<seastarized::FutureInputStream>>(ft);
-  });
+  return source->GetStream(start, num_bytes);
 }
 
 }  // namespace parquet

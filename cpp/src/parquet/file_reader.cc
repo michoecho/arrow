@@ -654,7 +654,6 @@ public:
               properties_(props),
               row_group_ordinal_(row_group_number),
               file_decryptor_(file_decryptor) {
-        // TODO jacek42 I'm not sure if this does not perform IO
         row_group_metadata_ = file_metadata->RowGroup(row_group_number);
     }
 
@@ -682,50 +681,49 @@ public:
             // The Parquet MR writer had a bug in 1.2.8 and below where it didn't include the
             // dictionary page header size in total_compressed_size and total_uncompressed_size
             // (see IMPALA-694). We add padding to compensate.
-            int64_t size = -1;
-            source_->GetSize(&size);
+            int64_t size = source_->GetSize();
             int64_t bytes_remaining = size - (col_start + col_length);
             int64_t padding = std::min<int64_t>(kMaxDictHeaderSize, bytes_remaining);
             col_length += padding;
         }
 
-        return properties_.GetStream(source_, col_start, col_length).then([=, col = std::move(col)](std::shared_ptr<FutureInputStream> stream) {
-            std::unique_ptr<ColumnCryptoMetaData> crypto_metadata = col->crypto_metadata();
+        auto stream = properties_.GetStream(source_, col_start, col_length);
 
-            // Column is encrypted only if crypto_metadata exists.
-            if (!crypto_metadata) {
-              return PageReader::Open(stream, col->num_values(), col->compression(),
-                                       properties_.memory_pool());
-            }
+        std::unique_ptr<ColumnCryptoMetaData> crypto_metadata = col->crypto_metadata();
 
-            // The column is encrypted
-            std::shared_ptr<Decryptor> meta_decryptor;
-            std::shared_ptr<Decryptor> data_decryptor;
-            // The column is encrypted with footer key
-            if (crypto_metadata->encrypted_with_footer_key()) {
-              meta_decryptor = file_decryptor_->GetFooterDecryptorForColumnMeta();
-              data_decryptor = file_decryptor_->GetFooterDecryptorForColumnData();
-              CryptoContext ctx(col->has_dictionary_page(), row_group_ordinal_,
-                                static_cast<int16_t>(i), meta_decryptor, data_decryptor);
-              return PageReader::Open(stream, col->num_values(), col->compression(),
-                                       properties_.memory_pool(), &ctx);
-            }
+        // Column is encrypted only if crypto_metadata exists.
+        if (!crypto_metadata) {
+          return seastar::make_ready_future<std::unique_ptr<PageReader>>(PageReader::Open(stream, col->num_values(), col->compression(),
+                                   properties_.memory_pool()));
+        }
 
-            // The column is encrypted with its own key
-            std::string column_key_metadata = crypto_metadata->key_metadata();
-            const std::string column_path = crypto_metadata->path_in_schema()->ToDotString();
+        // The column is encrypted
+        std::shared_ptr<Decryptor> meta_decryptor;
+        std::shared_ptr<Decryptor> data_decryptor;
+        // The column is encrypted with footer key
+        if (crypto_metadata->encrypted_with_footer_key()) {
+          meta_decryptor = file_decryptor_->GetFooterDecryptorForColumnMeta();
+          data_decryptor = file_decryptor_->GetFooterDecryptorForColumnData();
+          CryptoContext ctx(col->has_dictionary_page(), row_group_ordinal_,
+                            static_cast<int16_t>(i), meta_decryptor, data_decryptor);
+          return seastar::make_ready_future<std::unique_ptr<PageReader>>(PageReader::Open(stream, col->num_values(), col->compression(),
+                                   properties_.memory_pool(), &ctx));
+        }
 
-            meta_decryptor =
-                    file_decryptor_->GetColumnMetaDecryptor(column_path, column_key_metadata);
-            data_decryptor =
-                    file_decryptor_->GetColumnDataDecryptor(column_path, column_key_metadata);
+        // The column is encrypted with its own key
+        std::string column_key_metadata = crypto_metadata->key_metadata();
+        const std::string column_path = crypto_metadata->path_in_schema()->ToDotString();
 
-            CryptoContext ctx(col->has_dictionary_page(), row_group_ordinal_,
-                              static_cast<int16_t>(i), meta_decryptor, data_decryptor);
+        meta_decryptor =
+                file_decryptor_->GetColumnMetaDecryptor(column_path, column_key_metadata);
+        data_decryptor =
+                file_decryptor_->GetColumnDataDecryptor(column_path, column_key_metadata);
 
-            return PageReader::Open(stream, col->num_values(), col->compression(),
-                                     properties_.memory_pool(), &ctx);
-        });
+        CryptoContext ctx(col->has_dictionary_page(), row_group_ordinal_,
+                          static_cast<int16_t>(i), meta_decryptor, data_decryptor);
+
+        return seastar::make_ready_future<std::unique_ptr<PageReader>>(PageReader::Open(stream, col->num_values(), col->compression(),
+                                 properties_.memory_pool(), &ctx));
     }
 
 private:
@@ -775,8 +773,7 @@ public:
   }
 
   seastar::future<> ParseMetaData() {
-    int64_t file_size = -1;
-    source_->GetSize(&file_size);
+    int64_t file_size = source_->GetSize();
 
     if (file_size == 0) {
       throw ParquetInvalidOrCorruptedFileException("Parquet file size is 0 bytes");
@@ -913,7 +910,7 @@ seastar::future<> SerializedFile::ParseMetaDataOfEncryptedFileWithEncryptedFoote
                 footer_buffer, footer_read_size - footer_len - kFooterSize, footer_len);
       return seastar::make_ready_future();
     } else {
-      return source_->ReadAt(crypto_metadata_start, footer_len, &crypto_metadata_buffer).then([=] {
+      return source_->ReadAt(crypto_metadata_start, footer_len, &crypto_metadata_buffer).then([=]() {
         if (crypto_metadata_buffer->size() != footer_len) {
           throw ParquetException("Failed reading encrypted metadata buffer (requested " +
                                  std::to_string(footer_len) + " bytes but got " +
@@ -1087,9 +1084,9 @@ seastar::future<std::unique_ptr<ParquetFileReader>> ParquetFileReader::OpenFile(
         const std::string& path, bool memory_map, const ReaderProperties& props,
         const std::shared_ptr<FileMetaData>& metadata) {
     std::shared_ptr<seastarized::RandomAccessFile> source;
-  //  TODO jacek42 done in a very stupid way, replace with proper seastar files
-    source = std::make_shared<seastarized::ReadableRandomAccessFile>(path);
-    return Open(source, props, metadata);
+    return seastarized::ReadableRandomAccessFile::Open(path).then([props = std::move(props), metadata = std::move(metadata)] (auto source) {
+      return Open(source, props, metadata);
+    });
 }
 
 void ParquetFileReader::Open(std::unique_ptr<ParquetFileReader::Contents> contents) {

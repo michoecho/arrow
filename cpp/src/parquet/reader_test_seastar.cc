@@ -185,17 +185,12 @@ public:
     ss << dir_string << "/"
        << "alltypes_plain.parquet";
 
-    std::shared_ptr<::arrow::io::ReadableFile> tmp_handle;
-
-    PARQUET_THROW_NOT_OK(ReadableFile::Open(ss.str(), &tmp_handle));
-    fileno = tmp_handle->file_descriptor();
-    handle = std::make_shared<seastarized::ReadableRandomAccessFile>(tmp_handle);
+    handle = seastarized::ReadableRandomAccessFile::Open(ss.str()).get0();
   }
 
   void TearDown() {}
 
 protected:
-  int fileno;
   std::shared_ptr<seastarized::ReadableRandomAccessFile> handle;
 };
 

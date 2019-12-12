@@ -315,7 +315,7 @@ public:
   void AssertInvalidFileThrows(const std::shared_ptr<Buffer> &buffer) {
     reader_.reset(new ParquetFileReader());
 
-    auto reader = std::make_shared<BufferRandomAccessFile>(buffer);
+    auto reader = std::make_shared<RandomAccessBuffer>(buffer);
     ASSERT_THROW(ParquetFileReader::Contents::Open(reader).then([this, reader](auto ptr) {
       return reader_->Open(std::move(ptr));
     }).get(), ParquetException);
