@@ -757,7 +757,7 @@ public:
   }
 
   void Close() override {
-    // TODO jacek42 does it really not do any IO?
+    // TODO jacek42 watch out for IO
     if (file_decryptor_) file_decryptor_->WipeOutDecryptionKeys();
   }
 

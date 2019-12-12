@@ -92,6 +92,7 @@ TEST_F(TestAllTypesPlain, TestBatchRead) {
   // This row group must have 8 rows
   ASSERT_EQ(8, group->metadata()->num_rows());
 
+//  TODO jacek42 some problem with column reader in here?? investigate.
 //  ASSERT_TRUE(col->HasNext().get0());
 //  int64_t values_read;
 //  auto levels_read = col->ReadBatch(4, def_levels, rep_levels, values, &values_read).get0();
@@ -107,6 +108,7 @@ TEST_F(TestAllTypesPlain, TestBatchRead) {
 //  ASSERT_FALSE(col->HasNext().get0());
 }
 #if 0
+
 TEST_F(TestAllTypesPlain, TestFlatScannerInt32) {
   std::shared_ptr<RowGroupReader> group = reader_->RowGroup(0);
 
@@ -133,6 +135,7 @@ TEST_F(TestAllTypesPlain, TestSetScannerBatchSize) {
   scanner->SetBatchSize(1024);
   ASSERT_EQ(1024, scanner->batch_size());
 }
+#endif
 
 TEST_F(TestAllTypesPlain, DebugPrintWorks) {
   std::stringstream ss;
@@ -172,7 +175,6 @@ TEST_F(TestAllTypesPlain, ColumnSelectionOutOfRange) {
   ParquetFilePrinter printer2(reader_.get());
   ASSERT_THROW(printer2.DebugPrint(ss, columns), ParquetException);
 }
-#endif
 
 class TestLocalFile : public ::testing::Test {
 public:
