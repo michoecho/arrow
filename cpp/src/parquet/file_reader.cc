@@ -1088,20 +1088,7 @@ seastar::future<std::unique_ptr<ParquetFileReader>> ParquetFileReader::OpenFile(
         const std::shared_ptr<FileMetaData>& metadata) {
     std::shared_ptr<seastarized::RandomAccessFile> source;
   //  TODO jacek42 done in a very stupid way, replace with proper seastar files
-    if (memory_map) {
-      std::shared_ptr<::arrow::io::MemoryMappedFile> handle;
-      PARQUET_THROW_NOT_OK(
-                ::arrow::io::MemoryMappedFile::Open(path, ::arrow::io::FileMode::READ, &handle));
-      std::shared_ptr<seastarized::MemoryMappedRandomAccessFile> handle2 = std::make_shared<seastarized::MemoryMappedRandomAccessFile>(handle);
-      source = handle2;
-    } else {
-        std::shared_ptr<::arrow::io::ReadableFile> handle;
-        PARQUET_THROW_NOT_OK(
-                ::arrow::io::ReadableFile::Open(path, props.memory_pool(), &handle));
-      std::shared_ptr<seastarized::ReadableRandomAccessFile> handle2 = std::make_shared<seastarized::ReadableRandomAccessFile>(handle);
-      source = handle2;
-    }
-
+    source = std::make_shared<seastarized::ReadableRandomAccessFile>(path);
     return Open(source, props, metadata);
 }
 

@@ -3,6 +3,7 @@
 #include <vector>
 #include <string_view>
 #include <arrow/io/api.h>
+#include <seastar/core/seastar.hh>
 #include "arrow/util/memory.h"
 
 namespace parquet::seastarized {
@@ -181,7 +182,6 @@ public:
   virtual void GetSize(int64_t *size) = 0;
   virtual seastar::future<int64_t> Peek(int64_t nbytes, ::arrow::util::string_view *out) = 0;
   virtual seastar::future<> Seek(int64_t pos) = 0;
-  virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read, void* out) = 0;
   virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out) = 0;
 };
 
@@ -197,11 +197,6 @@ public:
   virtual void GetSize(int64_t* size) override {
     PARQUET_THROW_NOT_OK(br_->GetSize(size));
   }
-
-  virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read, void* out) override {
-    PARQUET_THROW_NOT_OK(br_->ReadAt(position, nbytes, bytes_read, out));
-    return seastar::make_ready_future();
-  };
 
   virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out) override {
     PARQUET_THROW_NOT_OK(br_->ReadAt(position, nbytes, out));
@@ -255,33 +250,18 @@ public:
 };
 
 class ReadableRandomAccessFile : public RandomAccessFile {
-
-private:
-  std::shared_ptr<::arrow::io::ReadableFile> rf_;
+// TODO:
+// - bytes vs bits
+// - without read_exactly and double copy
+// - Peek?
+// - GetSize
 
 public:
   virtual ~ReadableRandomAccessFile() override = default;
 
   virtual void GetSize(int64_t* size) {
-    // TODO jacek42 do not make it a future, just throw an exception if the file is not open
-    rf_->GetSize(size);
+    *size = fsize_;
   }
-
-  /// \brief Read nbytes at position, provide default implementations using
-  /// Read(...), but can be overridden. The default implementation is
-  /// thread-safe. It is unspecified whether this method updates the file
-  /// position or not.
-  ///
-  /// \param[in] position Where to read bytes from
-  /// \param[in] nbytes The number of bytes to read
-  /// \param[out] bytes_read The number of bytes read
-  /// \param[out] out The buffer to read bytes into
-  /// \return Status
-  virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read, void* out) {
-    //TODO jacek42
-    rf_->ReadAt(position, nbytes, bytes_read, out);
-    return seastar::make_ready_future();
-  };
 
   /// \brief Read nbytes at position, provide default implementations using
   /// Read(...), but can be overridden. The default implementation is
@@ -293,43 +273,52 @@ public:
   /// \param[out] out The buffer to read bytes into. The number of bytes read can be
   /// retrieved by calling Buffer::size().
   virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out) {
-    //TODO jacek42
-    rf_->ReadAt(position, nbytes, out);
-    return seastar::make_ready_future();
+    return sf_.dma_read(static_cast<uint64_t>(position), static_cast<size_t>(nbytes)).then([out](auto buf) {
+      memcpy((out->get())->data(), buf.get(), sizeof buf);
+      return seastar::make_ready_future();
+    });
   };
 
-  explicit ReadableRandomAccessFile(std::shared_ptr<::arrow::io::ReadableFile> rf) : rf_(rf) {};
+  seastar::future<ReadableRandomAccessFile> Open(const std::string& path) {
+    return seastar::open_file_dma(path, seastar::open_flags::ro).then([](seastar::file f) {
+      return f.size().then([f = std::move(f)](uint64_t fsize) {
+        return seastar::make_ready_future<ReadableRandomAccessFile>(std::move(f), fsize);
+      })
+    });
+  }
 
   seastar::future<int64_t> Read(int64_t nbytes, void *out) {
-    int64_t read = 0;
-    rf_->Read(nbytes, &read, out);
-    return seastar::make_ready_future<int64_t>(read);
+    fpos_ += nbytes;
+    int64_t bytes_read;
+    return ReadAt(fpos - nbytes, nbytes, &bytes_read, out).then([&bytes_read]() {
+      return seastar::make_ready_future<int64_t>(bytes_read);
+    });
   }
 
   seastar::future<int64_t> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) {
-    int64_t read = 0;
-    rf_->Read(nbytes, &read, out);
-    return seastar::make_ready_future<int64_t>(read);
+    fpos_ += nbytes;
+    int64_t bytes_read;
+    return ReadAt(fpos - nbytes, nbytes, &bytes_read, out).then([&bytes_read]() {
+      return seastar::make_ready_future<int64_t>(bytes_read);
+    });
   }
 
   seastar::future<int64_t> Peek(int64_t nbytes, ::arrow::util::string_view *out) {
-    rf_->Peek(nbytes, out);
-    return seastar::make_ready_future<int64_t>(0);
+//    TODO jacek42
+//    rf_->Peek(nbytes, out);
+//    return seastar::make_ready_future<int64_t>(0);
   }
 
   seastar::future<> Advance(int64_t nbytes) override {
-    rf_->Advance(nbytes);
-    return seastar::make_ready_future<>();
+    fpos_ += nbytes;
   }
 
   int64_t Tell() override {
-    int64_t pos = 0;
-    rf_->Tell(&pos);
-    return pos;
+    return fpos_;
   }
 
   seastar::future<> Seek(int64_t pos) {
-    rf_->Seek(pos);
+    fpos_ = pos;
     return seastar::make_ready_future();
   }
 
@@ -339,77 +328,13 @@ public:
   }
 
   seastar::future<> Close() override {
-    // TODO jacek42
-    return seastar::make_ready_future();
+    return sf_.close();
   }
-};
-
-
-class MemoryMappedRandomAccessFile : public RandomAccessFile {
-
 private:
-  std::shared_ptr<::arrow::io::MemoryMappedFile> mf_;
-
-public:
-  virtual ~MemoryMappedRandomAccessFile() override = default;
-
-  virtual void GetSize(int64_t* size) override {
-    PARQUET_THROW_NOT_OK(mf_->GetSize(size));
-  }
-
-  virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, int64_t* bytes_read, void* out) override {
-    PARQUET_THROW_NOT_OK(mf_->ReadAt(position, nbytes, bytes_read, out));
-    return seastar::make_ready_future();
-  };
-
-  virtual seastar::future<> ReadAt(int64_t position, int64_t nbytes, std::shared_ptr<Buffer>* out) override {
-    PARQUET_THROW_NOT_OK(mf_->ReadAt(position, nbytes, out));
-    return seastar::make_ready_future();
-  };
-
-  explicit MemoryMappedRandomAccessFile(std::shared_ptr<::arrow::io::MemoryMappedFile> mf) : mf_(mf) {};
-
-  seastar::future<int64_t> Read(int64_t nbytes, void *out) override {
-    int64_t read = 0;
-    PARQUET_THROW_NOT_OK(mf_->Read(nbytes, &read, out));
-    return seastar::make_ready_future<int64_t>(read);
-  }
-
-  seastar::future<int64_t> Read(int64_t nbytes, std::shared_ptr<Buffer> *out) override {
-    int64_t read = 0;
-    PARQUET_THROW_NOT_OK(mf_->Read(nbytes, &read, out));
-    return seastar::make_ready_future<int64_t>(read);
-  }
-
-  seastar::future<int64_t> Peek(int64_t nbytes, ::arrow::util::string_view *out) override {
-    PARQUET_THROW_NOT_OK(mf_->Peek(nbytes, out));
-    return seastar::make_ready_future<int64_t>(0);
-  }
-
-  seastar::future<> Advance(int64_t nbytes) override {
-    PARQUET_THROW_NOT_OK(mf_->Advance(nbytes));
-    return seastar::make_ready_future<>();
-  }
-
-  int64_t Tell() override {
-    int64_t pos = 0;
-    PARQUET_THROW_NOT_OK(mf_->Tell(&pos));
-    return pos;
-  }
-
-  seastar::future<> Seek(int64_t pos) override {
-    PARQUET_THROW_NOT_OK(mf_->Seek(pos));
-    return seastar::make_ready_future();
-  }
-
-  seastar::future<int64_t> Peek(int64_t nbytes, std::string_view *out) override {
-    throw "Not implemented";
-  }
-
-  seastar::future<> Close() override {
-    return seastar::make_ready_future();
-  }
+  ReadableRandomAccessFile(seastar::file&& sf, uint64_t fsize) : sf_(sf), fpos_(0), fsize_(fsize) {}
+  seastar::file sf_;
+  uint64_t fsize_;
+  uint64_t fpos_;
 };
-
 
 } // namespace parquet::seastarized
