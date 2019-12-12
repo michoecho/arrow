@@ -1579,15 +1579,14 @@ void SerializedPageReader::UpdateDecryption(const std::shared_ptr<Decryptor>& de
   }
 }
 
-// todo properly exit loop early in case there's need to return nullptr
 seastar::future<std::shared_ptr<Page>> SerializedPageReader::NextPage() {
   // Loop here because there may be unhandled page types that we skip until
   // finding a page that we do know what to do with
-  auto retval = std::make_shared<Page>();
+  auto retval = std::shared_ptr<Page>(nullptr);
   auto page_found = std::make_shared<bool>(false);
   return seastar::do_until(
     [this, page_found] {
-      !*page_found && seen_num_rows_ < total_num_rows_;
+      return !*page_found && seen_num_rows_ < total_num_rows_;
     },
     [=] () mutable {
       auto header_size = std::make_shared<uint32_t >(0);
@@ -1595,7 +1594,7 @@ seastar::future<std::shared_ptr<Page>> SerializedPageReader::NextPage() {
       auto buffer = std::make_shared<string_view>();
       auto compressed_len = std::make_shared<int>();
       auto uncompressed_len = std::make_shared<int>();
-      auto page_buffer = std::make_shared<Buffer>();
+      auto page_buffer = std::shared_ptr<Buffer>(nullptr);
 
       return seastar::repeat([=] () mutable {
         // Page headers can be very large because of page statistics
@@ -1643,7 +1642,7 @@ seastar::future<std::shared_ptr<Page>> SerializedPageReader::NextPage() {
         }
         // Read the compressed data page.
         return stream_->Read(*compressed_len, &page_buffer);
-      }).discard_result().then([=]{
+      }).discard_result().then([=] () mutable {
         if (page_buffer->size() != *compressed_len) {
           std::stringstream ss;
           ss << "Page was smaller (" << page_buffer->size() << ") than expected ("
@@ -1669,63 +1668,68 @@ seastar::future<std::shared_ptr<Page>> SerializedPageReader::NextPage() {
                                         decompression_buffer_->mutable_data()));
           page_buffer = decompression_buffer_;
         }
-      });
-      
+        return seastar::make_ready_future<>();
+      }).then([=] () mutable {
+        if (current_page_header_.type == format::PageType::DICTIONARY_PAGE) {
+          crypto_ctx_.start_decrypt_with_dictionary_page = false;
+          const format::DictionaryPageHeader& dict_header =
+              current_page_header_.dictionary_page_header;
 
+          bool is_sorted = dict_header.__isset.is_sorted ? dict_header.is_sorted : false;
 
-      if (current_page_header_.type == format::PageType::DICTIONARY_PAGE) {
-        crypto_ctx_.start_decrypt_with_dictionary_page = false;
-        const format::DictionaryPageHeader& dict_header =
-            current_page_header_.dictionary_page_header;
+          retval = std::make_shared<DictionaryPage>(page_buffer, dict_header.num_values,
+                                                  FromThrift(dict_header.encoding),
+                                                  is_sorted);
+          *page_found = true;
+          return seastar::make_ready_future<>();
+        } else if (current_page_header_.type == format::PageType::DATA_PAGE) {
+          ++page_ordinal_;
+          const format::DataPageHeader& header = current_page_header_.data_page_header;
 
-        bool is_sorted = dict_header.__isset.is_sorted ? dict_header.is_sorted : false;
-
-        return std::make_shared<DictionaryPage>(page_buffer, dict_header.num_values,
-                                                FromThrift(dict_header.encoding),
-                                                is_sorted);
-      } else if (current_page_header_.type == format::PageType::DATA_PAGE) {
-        ++page_ordinal_;
-        const format::DataPageHeader& header = current_page_header_.data_page_header;
-
-        EncodedStatistics page_statistics;
-        if (header.__isset.statistics) {
-          const format::Statistics& stats = header.statistics;
-          if (stats.__isset.max) {
-            page_statistics.set_max(stats.max);
+          EncodedStatistics page_statistics;
+          if (header.__isset.statistics) {
+            const format::Statistics& stats = header.statistics;
+            if (stats.__isset.max) {
+              page_statistics.set_max(stats.max);
+            }
+            if (stats.__isset.min) {
+              page_statistics.set_min(stats.min);
+            }
+            if (stats.__isset.null_count) {
+              page_statistics.set_null_count(stats.null_count);
+            }
+            if (stats.__isset.distinct_count) {
+              page_statistics.set_distinct_count(stats.distinct_count);
+            }
           }
-          if (stats.__isset.min) {
-            page_statistics.set_min(stats.min);
-          }
-          if (stats.__isset.null_count) {
-            page_statistics.set_null_count(stats.null_count);
-          }
-          if (stats.__isset.distinct_count) {
-            page_statistics.set_distinct_count(stats.distinct_count);
-          }
+
+          seen_num_rows_ += header.num_values;
+
+          retval = std::make_shared<DataPageV1>(
+              page_buffer, header.num_values, FromThrift(header.encoding),
+              FromThrift(header.definition_level_encoding),
+              FromThrift(header.repetition_level_encoding), page_statistics);
+          *page_found = true;
+          return seastar::make_ready_future<>();
+        } else if (current_page_header_.type == format::PageType::DATA_PAGE_V2) {
+          ++page_ordinal_;
+          const format::DataPageHeaderV2& header = current_page_header_.data_page_header_v2;
+          bool is_compressed = header.__isset.is_compressed ? header.is_compressed : false;
+
+          seen_num_rows_ += header.num_values;
+
+          retval = std::make_shared<DataPageV2>(
+              page_buffer, header.num_values, header.num_nulls, header.num_rows,
+              FromThrift(header.encoding), header.definition_levels_byte_length,
+              header.repetition_levels_byte_length, is_compressed);
+          *page_found = true;
+          return seastar::make_ready_future<>();
+        } else {
+          // We don't know what this page type is. We're allowed to skip non-data
+          // pages.
+          return seastar::make_ready_future<>();
         }
-
-        seen_num_rows_ += header.num_values;
-
-        return std::make_shared<DataPageV1>(
-            page_buffer, header.num_values, FromThrift(header.encoding),
-            FromThrift(header.definition_level_encoding),
-            FromThrift(header.repetition_level_encoding), page_statistics);
-      } else if (current_page_header_.type == format::PageType::DATA_PAGE_V2) {
-        ++page_ordinal_;
-        const format::DataPageHeaderV2& header = current_page_header_.data_page_header_v2;
-        bool is_compressed = header.__isset.is_compressed ? header.is_compressed : false;
-
-        seen_num_rows_ += header.num_values;
-
-        return std::make_shared<DataPageV2>(
-            page_buffer, header.num_values, header.num_nulls, header.num_rows,
-            FromThrift(header.encoding), header.definition_levels_byte_length,
-            header.repetition_levels_byte_length, is_compressed);
-      } else {
-        // We don't know what this page type is. We're allowed to skip non-data
-        // pages.
-        continue;
-      }
+      });
     }
   ).then([retval] {
     return seastar::make_ready_future<std::shared_ptr<Page>>(retval);
