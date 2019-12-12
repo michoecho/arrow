@@ -1060,34 +1060,28 @@ seastar::future<std::unique_ptr<ParquetFileReader::Contents>> ParquetFileReader:
     }
 }
 
+//seastar::future<std::unique_ptr<ParquetFileReader>> ParquetFileReader::Open(
+//        const std::shared_ptr<seastarized::RandomAccessFile>& source,
+//        const ReaderProperties& props, const std::shared_ptr<FileMetaData>& metadata) {
+//  return SerializedFile::Open(source, props, metadata).then([]
+//  (std::unique_ptr<ParquetFileReader::Contents> contents) mutable {
+//    std::unique_ptr<ParquetFileReader> result(new ParquetFileReader());
+//    result->Open(std::move(contents));
+//    return seastar::make_ready_future<std::unique_ptr<ParquetFileReader>>(std::move(result));
+//  });
+//}
+
 seastar::future<std::unique_ptr<ParquetFileReader>> ParquetFileReader::Open(
-        const std::shared_ptr<seastarized::RandomAccessFile>& source,
+        const std::shared_ptr<RandomAccessFile>& source,
         const ReaderProperties& props, const std::shared_ptr<FileMetaData>& metadata) {
-  return SerializedFile::Open(source, props, metadata).then([]
-  (std::unique_ptr<ParquetFileReader::Contents> contents) mutable {
-    std::unique_ptr<ParquetFileReader> result(new ParquetFileReader());
-    result->Open(std::move(contents));
-    return seastar::make_ready_future<std::unique_ptr<ParquetFileReader>>(std::move(result));
-  });
+  return SerializedFile::Open(source, props, metadata).then(
+          [] (std::unique_ptr<ParquetFileReader::Contents> contents) {
+            std::unique_ptr<ParquetFileReader> result(new ParquetFileReader());
+            result->Open(std::move(contents));
+            return result;
+          });
 }
 
-#if 0
-std::unique_ptr<ParquetFileReader> ParquetFileReader::Open(
-        std::unique_ptr<RandomAccessSource> source, const ReaderProperties& props,
-        const std::shared_ptr<FileMetaData>& metadata) {
-    auto wrapper = std::make_shared<ParquetInputWrapper>(std::move(source));
-    return Open(wrapper, props, metadata);
-}
-#endif
-
-seastar::future<std::unique_ptr<ParquetFileReader>> ParquetFileReader::OpenFile(
-        const std::string& path, bool memory_map, const ReaderProperties& props,
-        const std::shared_ptr<FileMetaData>& metadata) {
-    std::shared_ptr<seastarized::RandomAccessFile> source;
-    return seastarized::ReadableRandomAccessFile::Open(path).then([props = std::move(props), metadata = std::move(metadata)] (auto source) {
-      return Open(source, props, metadata);
-    });
-}
 
 void ParquetFileReader::Open(std::unique_ptr<ParquetFileReader::Contents> contents) {
   contents_ = std::move(contents);
