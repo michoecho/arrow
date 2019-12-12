@@ -89,30 +89,56 @@ int64_t ScanAllValues(int32_t batch_size, int16_t* def_levels, int16_t* rep_leve
 
 namespace seastarized {
 
+std::shared_ptr<Scanner> Scanner::Make(std::shared_ptr<ColumnReader> col_reader,
+                                       int64_t batch_size, MemoryPool* pool) {
+  switch (col_reader->type()) {
+    case Type::BOOLEAN:
+      return std::make_shared<BoolScanner>(col_reader, batch_size, pool);
+    case Type::INT32:
+      return std::make_shared<Int32Scanner>(col_reader, batch_size, pool);
+    case Type::INT64:
+      return std::make_shared<Int64Scanner>(col_reader, batch_size, pool);
+    case Type::INT96:
+      return std::make_shared<Int96Scanner>(col_reader, batch_size, pool);
+    case Type::FLOAT:
+      return std::make_shared<FloatScanner>(col_reader, batch_size, pool);
+    case Type::DOUBLE:
+      return std::make_shared<DoubleScanner>(col_reader, batch_size, pool);
+    case Type::BYTE_ARRAY:
+      return std::make_shared<ByteArrayScanner>(col_reader, batch_size, pool);
+    case Type::FIXED_LEN_BYTE_ARRAY:
+      return std::make_shared<FixedLenByteArrayScanner>(col_reader, batch_size, pool);
+    default:
+      ParquetException::NYI("type reader not implemented");
+  }
+  // Unreachable code, but supress compiler warning
+  return std::shared_ptr<Scanner>(nullptr);
+}
+
 seastar::future<int64_t> ScanAllValues(int32_t batch_size, int16_t *def_levels, int16_t *rep_levels,
                                        uint8_t *values, int64_t *values_buffered,
                                        seastarized::ColumnReader *reader) {
   switch (reader->type()) {
     case parquet::Type::BOOLEAN:
-      return ScanAll<parquet::seastarized::BoolReader>(batch_size, def_levels, rep_levels, values,
+      return ScanAll<seastarized::BoolReader>(batch_size, def_levels, rep_levels, values,
                                                        values_buffered, reader);
     case parquet::Type::INT32:
-      return ScanAll<parquet::seastarized::Int32Reader>(batch_size, def_levels, rep_levels, values,
+      return ScanAll<seastarized::Int32Reader>(batch_size, def_levels, rep_levels, values,
                                                         values_buffered, reader);
     case parquet::Type::INT64:
-      return ScanAll<parquet::seastarized::Int64Reader>(batch_size, def_levels, rep_levels, values,
+      return ScanAll<seastarized::Int64Reader>(batch_size, def_levels, rep_levels, values,
                                                         values_buffered, reader);
     case parquet::Type::INT96:
-      return ScanAll<parquet::seastarized::Int96Reader>(batch_size, def_levels, rep_levels, values,
+      return ScanAll<seastarized::Int96Reader>(batch_size, def_levels, rep_levels, values,
                                                         values_buffered, reader);
     case parquet::Type::FLOAT:
-      return ScanAll<parquet::seastarized::FloatReader>(batch_size, def_levels, rep_levels, values,
+      return ScanAll<seastarized::FloatReader>(batch_size, def_levels, rep_levels, values,
                                                         values_buffered, reader);
     case parquet::Type::DOUBLE:
-      return ScanAll<parquet::seastarized::DoubleReader>(batch_size, def_levels, rep_levels, values,
+      return ScanAll<seastarized::DoubleReader>(batch_size, def_levels, rep_levels, values,
                                                          values_buffered, reader);
     case parquet::Type::BYTE_ARRAY:
-      return ScanAll<parquet::seastarized::ByteArrayReader>(batch_size, def_levels, rep_levels,
+      return ScanAll<seastarized::ByteArrayReader>(batch_size, def_levels, rep_levels,
                                                             values,
                                                             values_buffered, reader);
     case parquet::Type::FIXED_LEN_BYTE_ARRAY:
