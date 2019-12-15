@@ -205,6 +205,7 @@ set(PARQUET_SRCS
     file_writer.cc
     internal_file_decryptor.cc
     internal_file_encryptor.cc
+    io.cc
     metadata.cc
     murmur3.cc
     parquet_constants.cpp
